@@ -200,7 +200,9 @@
             gridSpeed: 2.0,
             blinkRate: 1.0,
             idleMotion: 0.5,
-            headTilt: 0.3
+            headTilt: 0.3,
+            tunnelShift: 0.8,
+            tunnelTilt: 0.5
         };
 
         const SCREEN_WIDTH_CM = 30.0;
@@ -231,10 +233,12 @@
         scene.add(camera);
 
         let gridUniforms;
+        let environmentGroup = null;
 
         // --- Create Environment ---
         function createEnvironment() {
             const group = new THREE.Group();
+            environmentGroup = group;
             scene.add(group);
 
             const w = SCREEN_WIDTH_CM;
@@ -732,6 +736,11 @@
             folderBehavior.add(params, 'idleMotion', 0, 1.5).name('Idle Motion');
             folderBehavior.open();
 
+            const folderEnvironment = gui.addFolder('Tunnel');
+            folderEnvironment.add(params, 'tunnelShift', 0, 2.0).name('Parallax Shift');
+            folderEnvironment.add(params, 'tunnelTilt', 0, 1.5).name('Tunnel Tilt');
+            folderEnvironment.open();
+
             const folderVisuals = gui.addFolder('Visuals');
             folderVisuals.add(params, 'glowIntensity', 0.5, 3.0).name('Glow');
             folderVisuals.add(params, 'particleSize', 1.0, 5.0).name('Particle Size');
@@ -758,6 +767,62 @@
                 (halfH - head.y) * scale,
                 (-halfH - head.y) * scale,
                 NEAR, FAR
+            );
+        }
+
+        // --- Update Environment/Tunnel based on viewer position ---
+        function updateEnvironment(time) {
+            if (!environmentGroup) return;
+
+            const viewerX = state.viewerPosition.x;
+            const viewerY = state.viewerPosition.y;
+            const viewerZ = state.viewerPosition.z;
+
+            // Shift the tunnel slightly opposite to viewer movement
+            // This creates the effect of "peering into" the tunnel
+            const shiftX = -viewerX * params.tunnelShift * 0.05;
+            const shiftY = -viewerY * params.tunnelShift * 0.05;
+
+            // Tilt the tunnel based on viewer position
+            // When viewer moves right, tunnel tilts slightly left (and vice versa)
+            // This enhances the "looking down the corridor" feel
+            const tiltY = -viewerX * params.tunnelTilt * 0.003;
+            const tiltX = viewerY * params.tunnelTilt * 0.003;
+
+            // Add subtle breathing/floating motion to the tunnel
+            const breatheY = Math.sin(time * 0.3) * 0.1 * params.idleMotion;
+            const breatheX = Math.sin(time * 0.2) * 0.05 * params.idleMotion;
+
+            // Apply smooth interpolation
+            environmentGroup.position.x = THREE.MathUtils.lerp(
+                environmentGroup.position.x,
+                shiftX + breatheX,
+                params.smoothing * 0.5
+            );
+            environmentGroup.position.y = THREE.MathUtils.lerp(
+                environmentGroup.position.y,
+                shiftY + breatheY,
+                params.smoothing * 0.5
+            );
+
+            // Apply tilt rotation
+            environmentGroup.rotation.y = THREE.MathUtils.lerp(
+                environmentGroup.rotation.y,
+                tiltY,
+                params.smoothing * 0.8
+            );
+            environmentGroup.rotation.x = THREE.MathUtils.lerp(
+                environmentGroup.rotation.x,
+                tiltX,
+                params.smoothing * 0.8
+            );
+
+            // Subtle Z rotation for extra depth feel
+            const tiltZ = viewerX * params.tunnelTilt * 0.001;
+            environmentGroup.rotation.z = THREE.MathUtils.lerp(
+                environmentGroup.rotation.z,
+                tiltZ,
+                params.smoothing * 0.5
             );
         }
 
@@ -990,6 +1055,7 @@
             state.viewerPosition.copy(state.head);
 
             updateCamera(state.head);
+            updateEnvironment(time);
             updateHeadLookAt(time);
 
             renderer.render(scene, camera);
