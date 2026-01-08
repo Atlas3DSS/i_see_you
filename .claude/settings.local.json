@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: I See You - head tracking 3D display\n\n- 3D head that follows viewer''s gaze using webcam tracking\n- Off-axis projection for immersive \"window into world\" effect  \n- MediaPipe FaceMesh for iris-based head position tracking\n- Placeholder head with eyes that look at the viewer\n- Support for custom GLTF head models with bone-based tracking\n- dat.GUI controls for model positioning and tracking parameters\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git config:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(gh auth status:*)",
+      "Bash(git commit:*)",
+      "Bash(curl:*)"
+    ]
+  }
+}

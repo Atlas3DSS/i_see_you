@@ -237,6 +237,18 @@
         let gltfMixer = null;
         const gltfLoader = new GLTFLoader();
 
+        // Walking state
+        const walkState = {
+            isWalking: true,
+            direction: 1,  // 1 = right, -1 = left
+            position: 0,
+            speed: 2.0,
+            range: 12.0,   // How far to walk from center
+            walkAction: null,
+            idleAction: null,
+            currentAction: null
+        };
+
         // Blink state
         const blinkState = {
             isBlinking: false,
@@ -983,6 +995,10 @@
         // Call this function with a path to a GLTF/GLB file to use a custom head model
         // The model should ideally have blend shapes for facial animation
         // Place your model in: models/head/scene.gltf (or scene.glb)
+        let headBone = null;  // Reference to head bone for rotation
+        let neckBone = null;  // Reference to neck bone
+        let morphMeshes = []; // Meshes with blend shapes
+
         async function loadGLTFHead(modelPath = 'models/head/scene.gltf') {
             return new Promise((resolve, reject) => {
                 gltfLoader.load(
@@ -997,20 +1013,84 @@
 
                         headGroup = new THREE.Group();
                         gltfModel = gltf.scene;
+                        morphMeshes = [];
 
-                        // Auto-scale and center the model
+                        // Log the structure to help debug
+                        console.log('Model structure:');
+                        gltfModel.traverse((child) => {
+                            if (child.isBone || child.isSkinnedMesh || child.isMesh) {
+                                console.log(`  ${child.type}: ${child.name}`);
+                            }
+                        });
+
+                        // Find head bone and other important bones
+                        gltfModel.traverse((child) => {
+                            const name = child.name.toLowerCase();
+
+                            // Find head bone
+                            if (child.isBone && (name === 'head' || name.includes('head') ||
+                                name === 'bip01_head' || name.includes('_head'))) {
+                                headBone = child;
+                                console.log('Found head bone:', child.name);
+                            }
+
+                            // Find neck bone
+                            if (child.isBone && (name === 'neck' || name.includes('neck'))) {
+                                neckBone = child;
+                                console.log('Found neck bone:', child.name);
+                            }
+
+                            // Find eye bones/meshes
+                            if (name.includes('eye')) {
+                                console.log('Found eye:', child.name);
+                                if (name.includes('left') || name.includes('_l') || name.endsWith('.l')) {
+                                    eyeLeftGroup = child;
+                                } else if (name.includes('right') || name.includes('_r') || name.endsWith('.r')) {
+                                    eyeRightGroup = child;
+                                }
+                            }
+
+                            // Find meshes with morph targets (blend shapes)
+                            if (child.isMesh && child.morphTargetInfluences && child.morphTargetInfluences.length > 0) {
+                                console.log('Found mesh with blend shapes:', child.name);
+                                console.log('  Morph targets:', Object.keys(child.morphTargetDictionary || {}));
+                                morphMeshes.push(child);
+                                child.userData.hasMorphTargets = true;
+                            }
+                        });
+
+                        // Auto-scale and position the model
                         const box = new THREE.Box3().setFromObject(gltfModel);
                         const size = box.getSize(new THREE.Vector3());
                         const center = box.getCenter(new THREE.Vector3());
 
-                        // Scale to fit approximately 16 units (similar to point cloud head)
-                        const maxDim = Math.max(size.x, size.y, size.z);
-                        const targetSize = 16;
-                        const scale = targetSize / maxDim;
-                        gltfModel.scale.setScalar(scale);
+                        // For full-body models, we want to show mainly the head
+                        // Detect if this is a full body (height >> width)
+                        const isFullBody = size.y > size.x * 1.5;
 
-                        // Center the model
-                        gltfModel.position.sub(center.multiplyScalar(scale));
+                        let scale, yOffset;
+                        if (isFullBody) {
+                            // Scale based on approximate head size (about 1/7 of body height)
+                            const headSize = size.y / 7;
+                            const targetSize = 16;
+                            scale = targetSize / headSize;
+
+                            // Position so head is roughly centered
+                            // Head is at top ~1/7 of body
+                            yOffset = -size.y * scale * 0.35; // Move down so head is visible
+                            console.log('Detected full-body model, focusing on head');
+                        } else {
+                            // Just a head model - scale normally
+                            const maxDim = Math.max(size.x, size.y, size.z);
+                            const targetSize = 16;
+                            scale = targetSize / maxDim;
+                            yOffset = -center.y * scale;
+                        }
+
+                        gltfModel.scale.setScalar(scale);
+                        gltfModel.position.x = -center.x * scale;
+                        gltfModel.position.y = yOffset;
+                        gltfModel.position.z = -center.z * scale;
 
                         headGroup.add(gltfModel);
                         scene.add(headGroup);
@@ -1020,46 +1100,51 @@
                         // Setup animation mixer if model has animations
                         if (gltf.animations && gltf.animations.length > 0) {
                             gltfMixer = new THREE.AnimationMixer(gltfModel);
-                            console.log('Model has', gltf.animations.length, 'animations');
+                            console.log('Model has', gltf.animations.length, 'animations:');
 
-                            // Log available animations
+                            // Log available animations and find walk/idle
                             gltf.animations.forEach((clip, i) => {
-                                console.log(`Animation ${i}: ${clip.name}`);
-                            });
-                        }
+                                console.log(`  ${i}: ${clip.name} (${clip.duration.toFixed(2)}s)`);
+                                const clipName = clip.name.toLowerCase();
 
-                        // Look for blend shapes (morph targets) for facial animation
-                        gltfModel.traverse((child) => {
-                            if (child.isMesh && child.morphTargetInfluences) {
-                                console.log('Found mesh with blend shapes:', child.name);
-                                console.log('Morph targets:', child.morphTargetDictionary);
-
-                                // Store reference for later animation
-                                child.userData.hasMorphTargets = true;
-                            }
-
-                            // Look for eye bones/meshes
-                            if (child.name && (child.name.toLowerCase().includes('eye'))) {
-                                console.log('Found eye:', child.name);
-                                if (child.name.toLowerCase().includes('left') ||
-                                    child.name.toLowerCase().includes('_l')) {
-                                    eyeLeftGroup = child;
-                                } else if (child.name.toLowerCase().includes('right') ||
-                                           child.name.toLowerCase().includes('_r')) {
-                                    eyeRightGroup = child;
+                                // Find walk animation
+                                if (clipName.includes('walk') || clipName.includes('locomotion') ||
+                                    clipName.includes('run') || clipName.includes('moving')) {
+                                    walkState.walkAction = gltfMixer.clipAction(clip);
+                                    console.log('  -> Using as WALK animation');
                                 }
+
+                                // Find idle animation
+                                if (clipName.includes('idle') || clipName.includes('stand') ||
+                                    clipName.includes('breathe') || clipName.includes('rest')) {
+                                    walkState.idleAction = gltfMixer.clipAction(clip);
+                                    console.log('  -> Using as IDLE animation');
+                                }
+                            });
+
+                            // If no specific walk found, try first animation
+                            if (!walkState.walkAction && gltf.animations.length > 0) {
+                                walkState.walkAction = gltfMixer.clipAction(gltf.animations[0]);
+                                console.log('Using first animation as walk');
                             }
-                        });
+
+                            // Start walk animation if found
+                            if (walkState.walkAction) {
+                                walkState.walkAction.play();
+                                walkState.currentAction = walkState.walkAction;
+                            }
+                        }
 
                         params.useGLTFModel = true;
                         resolve(gltf);
                     },
                     (progress) => {
-                        console.log('Loading model:', (progress.loaded / progress.total * 100).toFixed(1) + '%');
+                        if (progress.total > 0) {
+                            console.log('Loading model:', (progress.loaded / progress.total * 100).toFixed(1) + '%');
+                        }
                     },
                     (error) => {
                         console.warn('Could not load GLTF model:', error);
-                        console.log('Using procedural head instead');
                         reject(error);
                     }
                 );
@@ -1067,17 +1152,29 @@
         }
 
         // Try to load GLTF model, fall back to procedural head
-        loadGLTFHead().catch(() => {
-            createCyberpunkHead();
-        });
+        // Try multiple possible paths
+        const modelPaths = [
+            'models/Human Female/human_female.glb',
+            'models/head/scene.gltf',
+            'models/head/scene.glb'
+        ];
 
-        // If no model found after a brief delay, create procedural head
-        setTimeout(() => {
-            if (!headGroup) {
-                console.log('No GLTF model found, creating procedural head');
-                createCyberpunkHead();
+        async function tryLoadModels() {
+            for (const path of modelPaths) {
+                try {
+                    await loadGLTFHead(path);
+                    console.log('Successfully loaded model from:', path);
+                    return;
+                } catch (e) {
+                    console.log('Could not load from:', path);
+                }
             }
-        }, 1000);
+            // If all paths fail, use procedural head
+            console.log('No GLTF model found, creating procedural head');
+            createCyberpunkHead();
+        }
+
+        tryLoadModels();
 
         // --- Controls ---
         function setupControls() {
@@ -1109,6 +1206,9 @@
             const folderBehavior = gui.addFolder('Behavior');
             folderBehavior.add(params, 'blinkRate', 0.2, 3.0).name('Blink Rate');
             folderBehavior.add(params, 'idleMotion', 0, 1.5).name('Idle Motion');
+            folderBehavior.add(walkState, 'isWalking').name('Walk Back/Forth');
+            folderBehavior.add(walkState, 'speed', 0.5, 8.0).name('Walk Speed');
+            folderBehavior.add(walkState, 'range', 5, 25).name('Walk Range');
             folderBehavior.open();
 
             const folderEnvironment = gui.addFolder('Tunnel');
@@ -1201,11 +1301,91 @@
             );
         }
 
+        // --- Walking Animation Update ---
+        function updateWalking(time, delta) {
+            if (!params.useGLTFModel || !headGroup) return;
+
+            if (walkState.isWalking) {
+                // Move position
+                walkState.position += walkState.direction * walkState.speed * delta;
+
+                // Check bounds and reverse direction
+                if (walkState.position > walkState.range) {
+                    walkState.position = walkState.range;
+                    walkState.direction = -1;
+                } else if (walkState.position < -walkState.range) {
+                    walkState.position = -walkState.range;
+                    walkState.direction = 1;
+                }
+
+                // Apply position to model
+                headGroup.position.x = walkState.position;
+
+                // Rotate model to face walking direction
+                // But blend with looking at viewer
+                const walkRotation = walkState.direction > 0 ? -Math.PI / 6 : Math.PI / 6;
+
+                // Smooth base rotation for walking direction
+                if (gltfModel) {
+                    const targetWalkRot = walkState.direction > 0 ? -0.3 : 0.3;
+                    gltfModel.rotation.y = THREE.MathUtils.lerp(
+                        gltfModel.rotation.y,
+                        targetWalkRot,
+                        params.smoothing
+                    );
+                }
+            }
+        }
+
         // --- Head Look-At with Idle Motion ---
         function updateHeadLookAt(time) {
             if (!headGroup) return;
 
             const viewerPos = state.viewerPosition.clone();
+
+            // If using GLTF with head bone, rotate the bone instead of the whole group
+            if (params.useGLTFModel && headBone) {
+                const headWorldPos = new THREE.Vector3();
+                headBone.getWorldPosition(headWorldPos);
+                const lookDir = viewerPos.clone().sub(headWorldPos);
+
+                // Calculate angles relative to head bone
+                const angleY = Math.atan2(lookDir.x, lookDir.z) * params.headTrackStrength * 0.5;
+                const horizontalDist = Math.sqrt(lookDir.x * lookDir.x + lookDir.z * lookDir.z);
+                const verticalAngle = Math.atan2(-lookDir.y, horizontalDist);
+                const verticalBoost = 1.0 + Math.abs(verticalAngle) * 0.5;
+                const angleX = verticalAngle * params.headTrackStrength * verticalBoost * 0.5;
+
+                // Apply to head bone (relative rotation)
+                const maxRotY = Math.PI / 4;
+                const maxRotX = Math.PI / 5;
+
+                const targetRotY = THREE.MathUtils.clamp(angleY, -maxRotY, maxRotY);
+                const targetRotX = THREE.MathUtils.clamp(angleX, -maxRotX, maxRotX);
+
+                // Store original rotation if not set
+                if (!headBone.userData.originalRotation) {
+                    headBone.userData.originalRotation = headBone.rotation.clone();
+                }
+
+                const orig = headBone.userData.originalRotation;
+                headBone.rotation.y = THREE.MathUtils.lerp(headBone.rotation.y, orig.y + targetRotY, params.smoothing * 2);
+                headBone.rotation.x = THREE.MathUtils.lerp(headBone.rotation.x, orig.x + targetRotX, params.smoothing * 2);
+
+                // Also rotate neck slightly if available
+                if (neckBone) {
+                    if (!neckBone.userData.originalRotation) {
+                        neckBone.userData.originalRotation = neckBone.rotation.clone();
+                    }
+                    const neckOrig = neckBone.userData.originalRotation;
+                    neckBone.rotation.y = THREE.MathUtils.lerp(neckBone.rotation.y, neckOrig.y + targetRotY * 0.3, params.smoothing);
+                    neckBone.rotation.x = THREE.MathUtils.lerp(neckBone.rotation.x, neckOrig.x + targetRotX * 0.3, params.smoothing);
+                }
+
+                return; // Don't rotate the whole group if using bones
+            }
+
+            // Fallback: rotate the whole headGroup (for procedural head or models without bones)
             const headPos = new THREE.Vector3();
             headGroup.getWorldPosition(headPos);
             const lookDir = viewerPos.clone().sub(headPos);
@@ -1439,6 +1619,9 @@
 
             // Update mouth animation
             updateMouth(time, delta);
+
+            // Update walking animation
+            updateWalking(time, delta);
 
             // Smooth tracking
             state.head.lerp(state.targetHead, params.smoothing);
