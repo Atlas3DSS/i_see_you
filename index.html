@@ -119,6 +119,61 @@
             );
             opacity: 0.3;
         }
+
+        #speech-controls {
+            position: fixed;
+            bottom: 15px;
+            right: 15px;
+            z-index: 1001;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        #speech-input {
+            padding: 8px 12px;
+            font-size: 12px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #00ffff;
+            border: 1px solid #00ffff;
+            font-family: 'Courier New', monospace;
+            width: 180px;
+            outline: none;
+        }
+
+        #speech-input::placeholder {
+            color: #006666;
+        }
+
+        #speech-input:focus {
+            background: rgba(0, 50, 50, 0.8);
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        }
+
+        #speak-btn, #random-btn {
+            padding: 8px 12px;
+            font-size: 11px;
+            background: transparent;
+            color: #00ffff;
+            border: 1px solid #00ffff;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+        }
+
+        #speak-btn:hover, #random-btn:hover {
+            background: rgba(0, 255, 255, 0.2);
+        }
+
+        #random-btn {
+            color: #ff0080;
+            border-color: #ff0080;
+        }
+
+        #random-btn:hover {
+            background: rgba(255, 0, 128, 0.2);
+        }
     </style>
 </head>
 
@@ -144,6 +199,13 @@
 
     <button id="fullscreen-btn">[ FULLSCREEN ]</button>
 
+    <!-- Speech Controls -->
+    <div id="speech-controls">
+        <input type="text" id="speech-input" placeholder="Type message..." />
+        <button id="speak-btn">SPEAK</button>
+        <button id="random-btn">RANDOM</button>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
@@ -166,6 +228,8 @@
         let eyeRightGroup = null;
         let eyelidLeft = null;
         let eyelidRight = null;
+        let mouthGroup = null;
+        let mouthInner = null;
         let headPointsUniforms = null;
         let headWireUniforms = null;
 
@@ -176,6 +240,31 @@
             nextBlinkTime: 2 + Math.random() * 3,
             blinkDuration: 0.15
         };
+
+        // Speech state
+        const speechState = {
+            isSpeaking: false,
+            mouthOpenness: 0,
+            targetOpenness: 0,
+            utterance: null,
+            speechSynth: window.speechSynthesis,
+            currentWord: '',
+            wordIndex: 0
+        };
+
+        // Creepy phrases the head can say
+        const creepyPhrases = [
+            "I see you.",
+            "Don't look away.",
+            "I know you're there.",
+            "Why do you watch me?",
+            "I've been waiting for you.",
+            "Your eyes... so beautiful.",
+            "Stay with me forever.",
+            "I can see into your soul.",
+            "We are connected now.",
+            "You cannot escape my gaze."
+        ];
 
         // User eye positions (from webcam)
         const userEyes = {
@@ -532,6 +621,9 @@
             // Create glowing eyes
             createEyes();
 
+            // Create animated mouth
+            createMouth();
+
             headGroup.position.z = params.modelZ;
         }
 
@@ -657,6 +749,184 @@
             eyelidRight.rotation.x = Math.PI * 0.1;
             eyelidRight.scale.y = 0; // Start open
             eyeRightGroup.add(eyelidRight);
+        }
+
+        // Create animated mouth
+        function createMouth() {
+            mouthGroup = new THREE.Group();
+            mouthGroup.position.set(0, -4, 6.5);
+            headGroup.add(mouthGroup);
+
+            // Outer mouth ring (lips)
+            const lipGeometry = new THREE.TorusGeometry(1.2, 0.15, 8, 24);
+            const lipMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    color: { value: new THREE.Color(0xff0066) },
+                    time: { value: 0 }
+                },
+                vertexShader: `
+                    varying vec3 vPos;
+                    void main() {
+                        vPos = position;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 color;
+                    uniform float time;
+                    varying vec3 vPos;
+                    void main() {
+                        float glow = 0.6 + sin(time * 2.0) * 0.2;
+                        gl_FragColor = vec4(color * glow, 0.9);
+                    }
+                `,
+                transparent: true,
+                blending: THREE.AdditiveBlending
+            });
+
+            const lips = new THREE.Mesh(lipGeometry, lipMaterial);
+            lips.rotation.x = Math.PI / 2;
+            lips.scale.set(1.5, 1, 0.3); // Flatten into mouth shape
+            mouthGroup.add(lips);
+
+            // Inner mouth (dark void that opens)
+            const innerGeometry = new THREE.PlaneGeometry(2, 1);
+            const innerMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    openness: { value: 0 },
+                    color: { value: new THREE.Color(0x200010) }
+                },
+                vertexShader: `
+                    uniform float openness;
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        vec3 pos = position;
+                        // Scale based on openness
+                        pos.y *= openness;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 color;
+                    uniform float openness;
+                    varying vec2 vUv;
+                    void main() {
+                        // Dark interior with slight glow at edges
+                        float edge = smoothstep(0.0, 0.3, vUv.x) * smoothstep(1.0, 0.7, vUv.x);
+                        edge *= smoothstep(0.0, 0.2, vUv.y) * smoothstep(1.0, 0.8, vUv.y);
+                        vec3 finalColor = mix(vec3(0.1, 0.0, 0.02), color, 1.0 - edge);
+                        gl_FragColor = vec4(finalColor, openness * 0.95);
+                    }
+                `,
+                transparent: true,
+                side: THREE.DoubleSide
+            });
+
+            mouthInner = new THREE.Mesh(innerGeometry, innerMaterial);
+            mouthInner.position.z = 0.1;
+            mouthGroup.add(mouthInner);
+
+            // Add some "teeth" particles
+            const teethGeometry = new THREE.BufferGeometry();
+            const teethPositions = [];
+            for (let i = 0; i < 20; i++) {
+                const x = (Math.random() - 0.5) * 1.5;
+                const y = (Math.random() - 0.5) * 0.3;
+                const z = 0.05;
+                teethPositions.push(x, y, z);
+            }
+            teethGeometry.setAttribute('position', new THREE.Float32BufferAttribute(teethPositions, 3));
+
+            const teethMaterial = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: 0.15,
+                transparent: true,
+                opacity: 0.8
+            });
+
+            const teeth = new THREE.Points(teethGeometry, teethMaterial);
+            mouthGroup.add(teeth);
+        }
+
+        // Text-to-Speech functions
+        function speak(text) {
+            if (speechState.isSpeaking) {
+                speechState.speechSynth.cancel();
+            }
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 0.85;
+            utterance.pitch = 0.7;
+            utterance.volume = 1.0;
+
+            // Try to get a deeper/creepier voice
+            const voices = speechState.speechSynth.getVoices();
+            const preferredVoice = voices.find(v =>
+                v.name.includes('Male') ||
+                v.name.includes('Daniel') ||
+                v.name.includes('Google UK English Male')
+            );
+            if (preferredVoice) {
+                utterance.voice = preferredVoice;
+            }
+
+            // Word boundary for mouth animation
+            utterance.onboundary = (event) => {
+                if (event.name === 'word') {
+                    speechState.currentWord = text.substring(event.charIndex, event.charIndex + event.charLength);
+                    // Open mouth based on word length/sounds
+                    speechState.targetOpenness = 0.5 + Math.random() * 0.5;
+                }
+            };
+
+            utterance.onstart = () => {
+                speechState.isSpeaking = true;
+                speechState.targetOpenness = 0.3;
+            };
+
+            utterance.onend = () => {
+                speechState.isSpeaking = false;
+                speechState.targetOpenness = 0;
+                speechState.currentWord = '';
+            };
+
+            speechState.utterance = utterance;
+            speechState.speechSynth.speak(utterance);
+        }
+
+        function speakRandom() {
+            const phrase = creepyPhrases[Math.floor(Math.random() * creepyPhrases.length)];
+            speak(phrase);
+        }
+
+        // Update mouth animation
+        function updateMouth(time, delta) {
+            if (!mouthInner) return;
+
+            // Smooth mouth movement
+            if (speechState.isSpeaking) {
+                // Oscillate mouth while speaking for more natural look
+                const speakOscillation = Math.sin(time * 15) * 0.2;
+                speechState.targetOpenness = 0.4 + speakOscillation + Math.random() * 0.2;
+            }
+
+            // Lerp mouth openness
+            speechState.mouthOpenness = THREE.MathUtils.lerp(
+                speechState.mouthOpenness,
+                speechState.targetOpenness,
+                0.3
+            );
+
+            // Apply to mouth inner mesh
+            mouthInner.material.uniforms.openness.value = speechState.mouthOpenness;
+            mouthInner.scale.y = 0.1 + speechState.mouthOpenness * 1.5;
+
+            // Animate lips slightly when speaking
+            if (mouthGroup.children[0]) {
+                mouthGroup.children[0].scale.y = 1 + speechState.mouthOpenness * 0.3;
+                mouthGroup.children[0].material.uniforms.time.value = time;
+            }
         }
 
         // Blink animation
@@ -1050,6 +1320,9 @@
             // Update blinking
             updateBlink(time, delta);
 
+            // Update mouth animation
+            updateMouth(time, delta);
+
             // Smooth tracking
             state.head.lerp(state.targetHead, params.smoothing);
             state.viewerPosition.copy(state.head);
@@ -1078,6 +1351,34 @@
             document.getElementById('fullscreen-btn').textContent =
                 document.fullscreenElement ? '[ EXIT ]' : '[ FULLSCREEN ]';
         });
+
+        // --- Speech Controls ---
+        document.getElementById('speak-btn').addEventListener('click', () => {
+            const text = document.getElementById('speech-input').value.trim();
+            if (text) {
+                speak(text);
+                document.getElementById('speech-input').value = '';
+            }
+        });
+
+        document.getElementById('random-btn').addEventListener('click', () => {
+            speakRandom();
+        });
+
+        document.getElementById('speech-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const text = e.target.value.trim();
+                if (text) {
+                    speak(text);
+                    e.target.value = '';
+                }
+            }
+        });
+
+        // Pre-load voices
+        if (speechState.speechSynth) {
+            speechState.speechSynth.getVoices();
+        }
     </script>
 </body>
 
