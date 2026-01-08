@@ -221,6 +221,7 @@
 
     <script type="module">
         import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
         // Global state
         let headGroup = null;
@@ -232,6 +233,9 @@
         let mouthInner = null;
         let headPointsUniforms = null;
         let headWireUniforms = null;
+        let gltfModel = null;
+        let gltfMixer = null;
+        const gltfLoader = new GLTFLoader();
 
         // Blink state
         const blinkState = {
@@ -280,6 +284,7 @@
             modelY: 0.0,
             headTrackStrength: 1.2,
             eyeTrackStrength: 0.8,
+            verticalSensitivity: 1.8,  // Increased for better vertical viewing
             smoothing: 0.06,
             showDebug: true,
             glowIntensity: 1.5,
@@ -291,7 +296,8 @@
             idleMotion: 0.5,
             headTilt: 0.3,
             tunnelShift: 0.8,
-            tunnelTilt: 0.5
+            tunnelTilt: 0.5,
+            useGLTFModel: false  // Toggle to switch between point cloud and GLTF model
         };
 
         const SCREEN_WIDTH_CM = 30.0;
@@ -973,7 +979,105 @@
             }
         }
 
-        createCyberpunkHead();
+        // --- Load GLTF Head Model ---
+        // Call this function with a path to a GLTF/GLB file to use a custom head model
+        // The model should ideally have blend shapes for facial animation
+        // Place your model in: models/head/scene.gltf (or scene.glb)
+        async function loadGLTFHead(modelPath = 'models/head/scene.gltf') {
+            return new Promise((resolve, reject) => {
+                gltfLoader.load(
+                    modelPath,
+                    (gltf) => {
+                        console.log('GLTF model loaded:', gltf);
+
+                        // Remove existing head if any
+                        if (headGroup) {
+                            scene.remove(headGroup);
+                        }
+
+                        headGroup = new THREE.Group();
+                        gltfModel = gltf.scene;
+
+                        // Auto-scale and center the model
+                        const box = new THREE.Box3().setFromObject(gltfModel);
+                        const size = box.getSize(new THREE.Vector3());
+                        const center = box.getCenter(new THREE.Vector3());
+
+                        // Scale to fit approximately 16 units (similar to point cloud head)
+                        const maxDim = Math.max(size.x, size.y, size.z);
+                        const targetSize = 16;
+                        const scale = targetSize / maxDim;
+                        gltfModel.scale.setScalar(scale);
+
+                        // Center the model
+                        gltfModel.position.sub(center.multiplyScalar(scale));
+
+                        headGroup.add(gltfModel);
+                        scene.add(headGroup);
+
+                        headGroup.position.z = params.modelZ;
+
+                        // Setup animation mixer if model has animations
+                        if (gltf.animations && gltf.animations.length > 0) {
+                            gltfMixer = new THREE.AnimationMixer(gltfModel);
+                            console.log('Model has', gltf.animations.length, 'animations');
+
+                            // Log available animations
+                            gltf.animations.forEach((clip, i) => {
+                                console.log(`Animation ${i}: ${clip.name}`);
+                            });
+                        }
+
+                        // Look for blend shapes (morph targets) for facial animation
+                        gltfModel.traverse((child) => {
+                            if (child.isMesh && child.morphTargetInfluences) {
+                                console.log('Found mesh with blend shapes:', child.name);
+                                console.log('Morph targets:', child.morphTargetDictionary);
+
+                                // Store reference for later animation
+                                child.userData.hasMorphTargets = true;
+                            }
+
+                            // Look for eye bones/meshes
+                            if (child.name && (child.name.toLowerCase().includes('eye'))) {
+                                console.log('Found eye:', child.name);
+                                if (child.name.toLowerCase().includes('left') ||
+                                    child.name.toLowerCase().includes('_l')) {
+                                    eyeLeftGroup = child;
+                                } else if (child.name.toLowerCase().includes('right') ||
+                                           child.name.toLowerCase().includes('_r')) {
+                                    eyeRightGroup = child;
+                                }
+                            }
+                        });
+
+                        params.useGLTFModel = true;
+                        resolve(gltf);
+                    },
+                    (progress) => {
+                        console.log('Loading model:', (progress.loaded / progress.total * 100).toFixed(1) + '%');
+                    },
+                    (error) => {
+                        console.warn('Could not load GLTF model:', error);
+                        console.log('Using procedural head instead');
+                        reject(error);
+                    }
+                );
+            });
+        }
+
+        // Try to load GLTF model, fall back to procedural head
+        loadGLTFHead().catch(() => {
+            createCyberpunkHead();
+        });
+
+        // If no model found after a brief delay, create procedural head
+        setTimeout(() => {
+            if (!headGroup) {
+                console.log('No GLTF model found, creating procedural head');
+                createCyberpunkHead();
+            }
+        }, 1000);
 
         // --- Controls ---
         function setupControls() {
@@ -994,6 +1098,7 @@
             const folderTracking = gui.addFolder('Tracking');
             folderTracking.add(params, 'headTrackStrength', 0, 2.0).name('Head Response');
             folderTracking.add(params, 'eyeTrackStrength', 0, 1.5).name('Eye Response');
+            folderTracking.add(params, 'verticalSensitivity', 0.5, 3.0).name('Vertical Sens.');
             folderTracking.add(params, 'headTilt', 0, 1.0).name('Head Tilt');
             folderTracking.add(params, 'smoothing', 0.02, 0.2).name('Smoothing');
             folderTracking.add(params, 'showDebug').name('Show Webcam').onChange(val => {
@@ -1107,7 +1212,13 @@
 
             // Calculate base angles for tracking
             const angleY = Math.atan2(lookDir.x, lookDir.z) * params.headTrackStrength;
-            const angleX = Math.atan2(-lookDir.y, Math.sqrt(lookDir.x * lookDir.x + lookDir.z * lookDir.z)) * params.headTrackStrength;
+
+            // Enhanced vertical tracking - more responsive when looking from above/below
+            const horizontalDist = Math.sqrt(lookDir.x * lookDir.x + lookDir.z * lookDir.z);
+            const verticalAngle = Math.atan2(-lookDir.y, horizontalDist);
+            // Apply stronger vertical response for extreme angles
+            const verticalBoost = 1.0 + Math.abs(verticalAngle) * 0.5;
+            const angleX = verticalAngle * params.headTrackStrength * verticalBoost;
 
             // Add head tilt (Z rotation) based on horizontal movement
             const angleZ = -angleY * params.headTilt * 0.3;
@@ -1117,8 +1228,8 @@
             const idleX = Math.sin(time * 0.3) * 0.015 * params.idleMotion;
             const idleZ = Math.sin(time * 0.7) * 0.01 * params.idleMotion;
 
-            const maxRotY = Math.PI / 2.5;
-            const maxRotX = Math.PI / 3;
+            const maxRotY = Math.PI / 2.2;  // Allow more horizontal rotation
+            const maxRotX = Math.PI / 2.5;  // Allow more vertical rotation (look up/down more)
             const maxRotZ = Math.PI / 8;
 
             const targetRotY = THREE.MathUtils.clamp(angleY + idleY, -maxRotY, maxRotY);
@@ -1226,11 +1337,12 @@
 
                             const SENSITIVITY = 2.5;
                             const wx = (0.5 - cx) * SCREEN_WIDTH_CM * SENSITIVITY;
-                            const wy = (0.5 - cy) * SCREEN_HEIGHT_CM * SENSITIVITY * 0.8;
+                            // Use verticalSensitivity for better vertical tracking
+                            const wy = (0.5 - cy) * SCREEN_HEIGHT_CM * SENSITIVITY * params.verticalSensitivity;
 
                             state.targetHead.set(
-                                THREE.MathUtils.clamp(wx, -50, 50),
-                                THREE.MathUtils.clamp(wy, -50, 50),
+                                THREE.MathUtils.clamp(wx, -60, 60),
+                                THREE.MathUtils.clamp(wy, -80, 80),  // Increased vertical range
                                 z
                             );
 
@@ -1298,6 +1410,11 @@
 
             const delta = clock.getDelta();
             const time = clock.getElapsedTime();
+
+            // Update GLTF animation mixer if it exists
+            if (gltfMixer) {
+                gltfMixer.update(delta);
+            }
 
             // Update uniforms
             if (gridUniforms) gridUniforms.time.value = time * params.gridSpeed;
