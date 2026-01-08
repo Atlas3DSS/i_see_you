@@ -3,13 +3,13 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>I See You - Head Tracking 3D Display</title>
+    <title>I See You - Cyberpunk Head Tracking</title>
     <style>
         body {
             margin: 0;
             overflow: hidden;
             background-color: #000;
-            font-family: sans-serif;
+            font-family: 'Courier New', monospace;
         }
 
         #canvas-container {
@@ -24,30 +24,41 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.85);
+            background: rgba(0, 0, 0, 0.9);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             z-index: 1000;
-            color: white;
+            color: #00ffff;
             text-align: center;
         }
 
+        #overlay h1 {
+            font-size: 48px;
+            letter-spacing: 10px;
+            text-shadow: 0 0 20px #00ffff, 0 0 40px #00ffff;
+            margin-bottom: 10px;
+        }
+
         #start-btn {
-            padding: 15px 40px;
-            font-size: 24px;
-            background: #ffffff;
-            color: #000;
-            border: none;
+            padding: 15px 50px;
+            font-size: 18px;
+            background: transparent;
+            color: #00ffff;
+            border: 2px solid #00ffff;
             cursor: pointer;
-            border-radius: 4px;
-            margin-top: 20px;
-            font-weight: bold;
+            margin-top: 30px;
+            font-family: 'Courier New', monospace;
+            letter-spacing: 3px;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
         }
 
         #start-btn:hover {
-            background: #ccc;
+            background: #00ffff;
+            color: #000;
+            box-shadow: 0 0 30px #00ffff;
         }
 
         #debug-video,
@@ -58,17 +69,18 @@
             width: 160px;
             height: 120px;
             z-index: 100;
-            opacity: 0.8;
+            opacity: 0.7;
             transform: scaleX(-1);
-            border: 1px solid #333;
+            border: 1px solid #00ffff;
             background: #000;
             pointer-events: none;
         }
 
         #status {
             margin-bottom: 20px;
-            font-size: 18px;
-            color: #aaa;
+            font-size: 14px;
+            color: #666;
+            letter-spacing: 2px;
         }
 
         #fullscreen-btn {
@@ -76,28 +88,36 @@
             top: 15px;
             left: 15px;
             z-index: 1001;
-            padding: 10px 15px;
-            font-size: 14px;
-            background: rgba(0, 255, 255, 0.2);
+            padding: 8px 12px;
+            font-size: 12px;
+            background: transparent;
             color: #00ffff;
             border: 1px solid #00ffff;
             cursor: pointer;
-            border-radius: 4px;
-            font-family: monospace;
+            font-family: 'Courier New', monospace;
             transition: all 0.2s ease;
         }
 
         #fullscreen-btn:hover {
-            background: rgba(0, 255, 255, 0.4);
+            background: rgba(0, 255, 255, 0.2);
         }
 
-        .info {
+        .scanlines {
             position: fixed;
-            bottom: 10px;
-            right: 10px;
-            color: #444;
-            font-size: 12px;
-            font-family: monospace;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 999;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.1) 0px,
+                rgba(0, 0, 0, 0.1) 1px,
+                transparent 1px,
+                transparent 3px
+            );
+            opacity: 0.3;
         }
     </style>
 </head>
@@ -105,28 +125,27 @@
 <body>
 
     <div id="overlay">
-        <h1>I See You</h1>
-        <p style="color: #888; max-width: 500px;">A 3D head that follows your gaze using webcam head tracking.<br>The head will look at you as you move around.</p>
-        <div id="status">Needs webcam access to track your head position.</div>
-        <button id="start-btn">ENTER</button>
+        <h1>I SEE YOU</h1>
+        <p style="color: #00aa88; max-width: 500px; line-height: 1.8;">
+            [ NEURAL INTERFACE DETECTED ]<br>
+            Initializing holographic projection system...<br>
+            Webcam required for spatial tracking.
+        </p>
+        <div id="status">AWAITING USER INPUT</div>
+        <button id="start-btn">Initialize</button>
     </div>
 
-    <!-- Hidden video for processing -->
+    <div class="scanlines"></div>
+
     <video id="debug-video" playsinline style="display:none"></video>
-    <!-- Visual feedback of tracking -->
     <canvas id="debug-canvas"></canvas>
 
     <div id="canvas-container"></div>
 
-    <!-- Fullscreen Button -->
-    <button id="fullscreen-btn">FULLSCREEN</button>
+    <button id="fullscreen-btn">[ FULLSCREEN ]</button>
 
-    <div class="info">Head tracking active</div>
-
-    <!-- MediaPipe via traditional scripts -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <!-- dat.gui for controls -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
 
     <script type="importmap">
@@ -140,43 +159,36 @@
 
     <script type="module">
         import * as THREE from 'three';
-        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-        // Global variables
-        let mainLight, ambientLight;
-        let mixer; // Animation Mixer
-        let headModel = null;
-        let headBone = null; // For rigged models
-        let neckBone = null;
-        let eyeLeft = null;
-        let eyeRight = null;
+        // Global state
+        let headGroup = null;
+        let eyeLeftGroup = null;
+        let eyeRightGroup = null;
+        let headPointsUniforms = null;
+        let headWireUniforms = null;
 
-        // --- GUI Controls ---
         const params = {
             modelScale: 1.0,
-            modelRotY: 0.0,
-            modelZ: -30.0,
+            modelZ: -25.0,
             modelY: 0.0,
-            lightIntensity: 3.0,
-            ambientIntensity: 1.5,
-            gridSpeed: 2.0,
-            headTrackStrength: 1.0,
-            eyeTrackStrength: 0.5,
-            smoothing: 0.08,
-            showDebug: true
+            headTrackStrength: 1.2,
+            eyeTrackStrength: 0.8,
+            smoothing: 0.06,
+            showDebug: true,
+            glowIntensity: 1.5,
+            pulseSpeed: 1.0,
+            particleSize: 2.5,
+            wireframeOpacity: 0.4,
+            gridSpeed: 2.0
         };
 
-        // --- Configuration ---
         const SCREEN_WIDTH_CM = 30.0;
         const SCREEN_HEIGHT_CM = 20.0;
         const BOX_DEPTH_CM = 80.0;
-
-        // Tracking constants
         const DEFAULT_HEAD_Z = 60.0;
         const NEAR = 0.5;
         const FAR = 1000.0;
 
-        // --- State ---
         const state = {
             head: new THREE.Vector3(0, 0, DEFAULT_HEAD_Z),
             targetHead: new THREE.Vector3(0, 0, DEFAULT_HEAD_Z),
@@ -184,25 +196,22 @@
             trackingActive: false
         };
 
-        // --- Setup Three.js ---
+        // Setup renderer
         const container = document.getElementById('canvas-container');
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.0;
-        renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         container.appendChild(renderer.domElement);
 
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x0a0a0a);
+        scene.background = new THREE.Color(0x020208);
         const camera = new THREE.Camera();
         scene.add(camera);
 
         let gridUniforms;
 
-        // --- Environment: Deep Virtual Chamber ---
+        // --- Create Environment ---
         function createEnvironment() {
             const group = new THREE.Group();
             scene.add(group);
@@ -212,43 +221,26 @@
             const d = BOX_DEPTH_CM;
 
             const vertices = [];
-            const stepX = 2.0;
+            const stepX = 2.5;
+            const numZLines = 25;
 
-            // Floor & Ceiling lines
             for (let x = -w / 2; x <= w / 2; x += stepX) {
-                vertices.push(x, -h / 2, 0); vertices.push(x, -h / 2, -d);
-                vertices.push(x, h / 2, 0); vertices.push(x, h / 2, -d);
+                vertices.push(x, -h / 2, 0, x, -h / 2, -d);
+                vertices.push(x, h / 2, 0, x, h / 2, -d);
             }
 
-            // Variable Z spacing
-            const numZLines = 20;
             for (let i = 0; i <= numZLines; i++) {
                 const t = i / numZLines;
                 const z = -d * Math.pow(t, 1.5);
-                vertices.push(-w / 2, -h / 2, z); vertices.push(w / 2, -h / 2, z);
-                vertices.push(-w / 2, h / 2, z); vertices.push(w / 2, h / 2, z);
+                vertices.push(-w / 2, -h / 2, z, w / 2, -h / 2, z);
+                vertices.push(-w / 2, h / 2, z, w / 2, h / 2, z);
+                vertices.push(-w / 2, -h / 2, z, -w / 2, h / 2, z);
+                vertices.push(w / 2, -h / 2, z, w / 2, h / 2, z);
             }
 
-            // Walls
-            for (let i = 0; i <= numZLines; i++) {
-                const t = i / numZLines;
-                const z = -d * Math.pow(t, 1.5);
-                vertices.push(-w / 2, -h / 2, z); vertices.push(-w / 2, h / 2, z);
-                vertices.push(w / 2, -h / 2, z); vertices.push(w / 2, h / 2, z);
-            }
-
-            // Back Wall
-            for (let x = -w / 2; x <= w / 2; x += stepX) {
-                vertices.push(x, -h / 2, -d); vertices.push(x, h / 2, -d);
-            }
             for (let y = -h / 2; y <= h / 2; y += stepX) {
-                vertices.push(-w / 2, y, -d); vertices.push(w / 2, y, -d);
-            }
-
-            // Wall Horizontals
-            for (let y = -h / 2; y <= h / 2; y += stepX) {
-                vertices.push(-w / 2, y, 0); vertices.push(-w / 2, y, -d);
-                vertices.push(w / 2, y, 0); vertices.push(w / 2, y, -d);
+                vertices.push(-w / 2, y, 0, -w / 2, y, -d);
+                vertices.push(w / 2, y, 0, w / 2, y, -d);
             }
 
             const gridGeo = new THREE.BufferGeometry();
@@ -259,10 +251,9 @@
                 color: { value: new THREE.Color(0x00ffff) }
             };
 
-            const shaderMat = new THREE.ShaderMaterial({
+            const gridMat = new THREE.ShaderMaterial({
                 uniforms: gridUniforms,
                 vertexShader: `
-                    uniform float time;
                     varying vec3 vPos;
                     void main() {
                         vPos = position;
@@ -273,16 +264,12 @@
                     uniform float time;
                     uniform vec3 color;
                     varying vec3 vPos;
-
                     void main() {
-                        float pulseSpeed = time * 2.0;
-                        float sWave = sin(vPos.z * 0.1 + pulseSpeed) * 0.5 + 0.5;
-                        float baseGlow = 0.3 + sWave * 0.7;
-                        float distFade = smoothstep(-80.0, 0.0, vPos.z);
-                        distFade = pow(distFade, 1.5);
-                        float foregroundBoost = smoothstep(-20.0, 5.0, vPos.z) * 0.5;
-                        float finalAlpha = distFade * (baseGlow + foregroundBoost);
-                        gl_FragColor = vec4(color * (baseGlow + foregroundBoost), finalAlpha);
+                        float pulse = sin(vPos.z * 0.08 + time * 2.0) * 0.5 + 0.5;
+                        float glow = 0.2 + pulse * 0.5;
+                        float fade = smoothstep(-80.0, 0.0, vPos.z);
+                        fade = pow(fade, 1.8);
+                        gl_FragColor = vec4(color * glow, fade * (glow + 0.1));
                     }
                 `,
                 transparent: true,
@@ -290,208 +277,350 @@
                 blending: THREE.AdditiveBlending
             });
 
-            const gridLines = new THREE.LineSegments(gridGeo, shaderMat);
-            group.add(gridLines);
+            group.add(new THREE.LineSegments(gridGeo, gridMat));
 
-            // Solid dark walls
+            // Dark box
             const boxGeo = new THREE.BoxGeometry(w, h, d);
             boxGeo.translate(0, 0, -d / 2);
-            const wallMat = new THREE.MeshBasicMaterial({ color: 0x020205, side: THREE.BackSide });
-            const walls = new THREE.Mesh(boxGeo, wallMat);
-            group.add(walls);
-
-            // Lighting
-            ambientLight = new THREE.AmbientLight(0xffffff, params.ambientIntensity);
-            scene.add(ambientLight);
-
-            mainLight = new THREE.DirectionalLight(0xffffff, params.lightIntensity);
-            mainLight.position.set(5, 10, 10);
-            mainLight.castShadow = true;
-            mainLight.shadow.mapSize.width = 2048;
-            mainLight.shadow.mapSize.height = 2048;
-            scene.add(mainLight);
-
-            // Fill light from below
-            const fillLight = new THREE.DirectionalLight(0x4488ff, 0.5);
-            fillLight.position.set(-5, -5, 5);
-            scene.add(fillLight);
-
-            // Rim light
-            const rimLight = new THREE.PointLight(0x00ffff, 1, 50);
-            rimLight.position.set(0, -10, -20);
-            scene.add(rimLight);
-
-            return { floorY: -h / 2, centerZ: -d / 3 };
+            const wallMat = new THREE.MeshBasicMaterial({ color: 0x010105, side: THREE.BackSide });
+            group.add(new THREE.Mesh(boxGeo, wallMat));
         }
 
-        const envInfo = createEnvironment();
+        createEnvironment();
 
-        // --- Setup Controls ---
+        // --- Generate Cyberpunk Head ---
+        function createCyberpunkHead() {
+            headGroup = new THREE.Group();
+            scene.add(headGroup);
+
+            const headScale = 8;
+            const points = [];
+            const colors = [];
+
+            // Generate head shape using superellipsoid + noise
+            // Head: squashed sphere, elongated vertically
+            const numPoints = 8000;
+
+            for (let i = 0; i < numPoints; i++) {
+                // Spherical coordinates with head-like deformation
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+
+                // Base radius with head-like shape modifications
+                let r = 1.0;
+
+                // Make it taller (head is taller than wide)
+                const yFactor = Math.cos(phi);
+                r *= 1.0 + 0.15 * yFactor;
+
+                // Flatten the back
+                const xDir = Math.sin(phi) * Math.cos(theta);
+                if (xDir < -0.3) r *= 0.85;
+
+                // Chin area
+                if (yFactor < -0.6 && Math.sin(phi) * Math.sin(theta) > 0) {
+                    r *= 0.75 + 0.2 * (yFactor + 1);
+                }
+
+                // Forehead bulge
+                if (yFactor > 0.5 && xDir > 0) {
+                    r *= 1.05;
+                }
+
+                // Slight noise
+                r *= 0.95 + Math.random() * 0.1;
+
+                const x = r * Math.sin(phi) * Math.cos(theta) * headScale * 0.85;
+                const y = r * Math.cos(phi) * headScale * 1.1;
+                const z = r * Math.sin(phi) * Math.sin(theta) * headScale;
+
+                points.push(x, y, z);
+
+                // Color variation - cyan to purple gradient
+                const t = (y / headScale + 1) * 0.5;
+                colors.push(
+                    0.0 + t * 0.5,    // R
+                    0.8 + t * 0.2,    // G
+                    1.0               // B
+                );
+            }
+
+            // Add feature lines (facial structure hints)
+            // Eye sockets area
+            for (let i = 0; i < 500; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const eyeRadius = 0.8 + Math.random() * 0.4;
+                const eyeX = (i < 250 ? -2.5 : 2.5);
+                const eyeY = 2;
+                const eyeZ = 6 + Math.cos(angle) * eyeRadius;
+
+                points.push(
+                    eyeX + Math.cos(angle) * eyeRadius * 1.2,
+                    eyeY + Math.sin(angle) * eyeRadius,
+                    eyeZ
+                );
+                colors.push(0.2, 1.0, 1.0);
+            }
+
+            // Nose ridge
+            for (let i = 0; i < 200; i++) {
+                const t = Math.random();
+                points.push(
+                    (Math.random() - 0.5) * 0.5,
+                    -1 + t * 4,
+                    7 + t * 1.5 + (Math.random() - 0.5) * 0.3
+                );
+                colors.push(0.0, 0.9, 0.9);
+            }
+
+            // Mouth line
+            for (let i = 0; i < 150; i++) {
+                const t = (Math.random() - 0.5) * 2;
+                points.push(
+                    t * 2,
+                    -4 + Math.sin(Math.abs(t) * Math.PI) * 0.3,
+                    6.5 + (Math.random() - 0.5) * 0.2
+                );
+                colors.push(0.5, 0.2, 0.8);
+            }
+
+            const pointsGeo = new THREE.BufferGeometry();
+            pointsGeo.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+            pointsGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+            headPointsUniforms = {
+                time: { value: 0 },
+                glowIntensity: { value: params.glowIntensity },
+                size: { value: params.particleSize }
+            };
+
+            const pointsMat = new THREE.ShaderMaterial({
+                uniforms: headPointsUniforms,
+                vertexShader: `
+                    attribute vec3 color;
+                    uniform float time;
+                    uniform float size;
+                    varying vec3 vColor;
+                    varying float vAlpha;
+
+                    void main() {
+                        vColor = color;
+
+                        vec3 pos = position;
+
+                        // Subtle floating animation
+                        pos.y += sin(time * 2.0 + position.x * 0.5) * 0.05;
+                        pos.x += cos(time * 1.5 + position.y * 0.3) * 0.03;
+
+                        vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                        gl_Position = projectionMatrix * mvPosition;
+
+                        // Size attenuation
+                        gl_PointSize = size * (150.0 / -mvPosition.z);
+
+                        // Alpha based on depth and random flicker
+                        float flicker = sin(time * 10.0 + position.x * 50.0) * 0.1 + 0.9;
+                        vAlpha = flicker;
+                    }
+                `,
+                fragmentShader: `
+                    uniform float glowIntensity;
+                    uniform float time;
+                    varying vec3 vColor;
+                    varying float vAlpha;
+
+                    void main() {
+                        // Circular point with soft edge
+                        vec2 center = gl_PointCoord - vec2(0.5);
+                        float dist = length(center);
+                        if (dist > 0.5) discard;
+
+                        float glow = 1.0 - dist * 2.0;
+                        glow = pow(glow, 1.5);
+
+                        vec3 finalColor = vColor * glowIntensity * glow;
+                        float alpha = glow * vAlpha;
+
+                        gl_FragColor = vec4(finalColor, alpha);
+                    }
+                `,
+                transparent: true,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending
+            });
+
+            const headPoints = new THREE.Points(pointsGeo, pointsMat);
+            headGroup.add(headPoints);
+
+            // Add wireframe skull outline
+            const skullGeo = new THREE.SphereGeometry(headScale * 0.95, 24, 18);
+            // Deform to head shape
+            const skullPos = skullGeo.attributes.position;
+            for (let i = 0; i < skullPos.count; i++) {
+                const x = skullPos.getX(i);
+                const y = skullPos.getY(i);
+                const z = skullPos.getZ(i);
+
+                let scale = 1.0;
+                // Elongate Y
+                skullPos.setY(i, y * 1.15);
+                // Narrow sides
+                skullPos.setX(i, x * 0.9);
+                // Push face forward slightly
+                if (z > 0) skullPos.setZ(i, z * 1.05);
+            }
+
+            headWireUniforms = {
+                time: { value: 0 },
+                opacity: { value: params.wireframeOpacity }
+            };
+
+            const wireMat = new THREE.ShaderMaterial({
+                uniforms: headWireUniforms,
+                vertexShader: `
+                    varying vec3 vPos;
+                    void main() {
+                        vPos = position;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform float time;
+                    uniform float opacity;
+                    varying vec3 vPos;
+                    void main() {
+                        float scanline = sin(vPos.y * 20.0 + time * 5.0) * 0.5 + 0.5;
+                        vec3 color = vec3(0.0, 0.8, 1.0);
+                        float alpha = opacity * (0.3 + scanline * 0.3);
+                        gl_FragColor = vec4(color, alpha);
+                    }
+                `,
+                wireframe: true,
+                transparent: true,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending
+            });
+
+            const skullWire = new THREE.Mesh(skullGeo, wireMat);
+            headGroup.add(skullWire);
+
+            // Create glowing eyes
+            createEyes();
+
+            headGroup.position.z = params.modelZ;
+        }
+
+        function createEyes() {
+            const eyeGeometry = new THREE.SphereGeometry(1.2, 16, 16);
+
+            const eyeMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0 },
+                    innerColor: { value: new THREE.Color(0xff0040) },
+                    outerColor: { value: new THREE.Color(0x00ffff) }
+                },
+                vertexShader: `
+                    varying vec3 vNormal;
+                    varying vec3 vPosition;
+                    void main() {
+                        vNormal = normalize(normalMatrix * normal);
+                        vPosition = position;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform float time;
+                    uniform vec3 innerColor;
+                    uniform vec3 outerColor;
+                    varying vec3 vNormal;
+                    varying vec3 vPosition;
+
+                    void main() {
+                        // Glowing eye effect
+                        float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 2.0);
+                        vec3 color = mix(innerColor, outerColor, fresnel);
+
+                        // Pulsing
+                        float pulse = sin(time * 3.0) * 0.2 + 0.8;
+                        color *= pulse;
+
+                        // Inner glow
+                        float center = 1.0 - length(vPosition.xy) * 0.5;
+                        center = pow(max(center, 0.0), 2.0);
+
+                        gl_FragColor = vec4(color * (0.5 + center), 0.9);
+                    }
+                `,
+                transparent: true,
+                blending: THREE.AdditiveBlending
+            });
+
+            // Left eye
+            eyeLeftGroup = new THREE.Group();
+            const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial.clone());
+            eyeLeftGroup.add(leftEye);
+            eyeLeftGroup.position.set(-2.5, 2, 6.5);
+            headGroup.add(eyeLeftGroup);
+
+            // Right eye
+            eyeRightGroup = new THREE.Group();
+            const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial.clone());
+            eyeRightGroup.add(rightEye);
+            eyeRightGroup.position.set(2.5, 2, 6.5);
+            headGroup.add(eyeRightGroup);
+
+            // Add pupil glow points
+            const pupilGeo = new THREE.SphereGeometry(0.3, 8, 8);
+            const pupilMat = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.9
+            });
+
+            const leftPupil = new THREE.Mesh(pupilGeo, pupilMat);
+            leftPupil.position.z = 0.9;
+            eyeLeftGroup.add(leftPupil);
+
+            const rightPupil = new THREE.Mesh(pupilGeo, pupilMat.clone());
+            rightPupil.position.z = 0.9;
+            eyeRightGroup.add(rightPupil);
+        }
+
+        createCyberpunkHead();
+
+        // --- Controls ---
         function setupControls() {
             const gui = new dat.GUI();
 
-            const folderModel = gui.addFolder('Model');
-            folderModel.add(params, 'modelScale', 0.1, 3.0).name('Scale').onChange(updateModelTransform);
-            folderModel.add(params, 'modelRotY', -Math.PI, Math.PI).name('Rotation').onChange(updateModelTransform);
-            folderModel.add(params, 'modelZ', -60, 0).name('Depth').onChange(updateModelTransform);
-            folderModel.add(params, 'modelY', -15, 15).name('Height').onChange(updateModelTransform);
-            folderModel.open();
+            const folderHead = gui.addFolder('Head');
+            folderHead.add(params, 'modelScale', 0.5, 2.0).name('Scale').onChange(v => {
+                headGroup.scale.setScalar(v);
+            });
+            folderHead.add(params, 'modelZ', -50, 0).name('Depth').onChange(v => {
+                headGroup.position.z = v;
+            });
+            folderHead.add(params, 'modelY', -10, 10).name('Height').onChange(v => {
+                headGroup.position.y = v;
+            });
+            folderHead.open();
 
-            const folderTracking = gui.addFolder('Head Tracking');
-            folderTracking.add(params, 'headTrackStrength', 0, 2.0).name('Head Strength');
-            folderTracking.add(params, 'eyeTrackStrength', 0, 1.0).name('Eye Strength');
-            folderTracking.add(params, 'smoothing', 0.01, 0.3).name('Smoothing');
+            const folderTracking = gui.addFolder('Tracking');
+            folderTracking.add(params, 'headTrackStrength', 0, 2.0).name('Head Response');
+            folderTracking.add(params, 'eyeTrackStrength', 0, 1.5).name('Eye Response');
+            folderTracking.add(params, 'smoothing', 0.02, 0.2).name('Smoothing');
             folderTracking.add(params, 'showDebug').name('Show Webcam').onChange(val => {
                 document.getElementById('debug-canvas').style.display = val ? 'block' : 'none';
             });
             folderTracking.open();
 
-            const folderLight = gui.addFolder('Lighting');
-            folderLight.add(params, 'lightIntensity', 0, 10).name('Main Light').onChange(val => {
-                if (mainLight) mainLight.intensity = val;
-            });
-            folderLight.add(params, 'ambientIntensity', 0, 5).name('Ambient').onChange(val => {
-                if (ambientLight) ambientLight.intensity = val;
-            });
-            folderLight.add(params, 'gridSpeed', 0, 5.0).name('Grid Speed');
+            const folderVisuals = gui.addFolder('Visuals');
+            folderVisuals.add(params, 'glowIntensity', 0.5, 3.0).name('Glow');
+            folderVisuals.add(params, 'particleSize', 1.0, 5.0).name('Particle Size');
+            folderVisuals.add(params, 'wireframeOpacity', 0, 1.0).name('Wireframe');
+            folderVisuals.add(params, 'pulseSpeed', 0, 3.0).name('Pulse Speed');
+            folderVisuals.add(params, 'gridSpeed', 0, 5.0).name('Grid Speed');
         }
 
-        // Model group
-        const loader = new GLTFLoader();
-        let modelGroup = new THREE.Group();
-        scene.add(modelGroup);
-
-        function updateModelTransform() {
-            modelGroup.scale.setScalar(params.modelScale);
-            modelGroup.rotation.y = params.modelRotY;
-            modelGroup.position.z = params.modelZ;
-            modelGroup.position.y = params.modelY;
-        }
-
-        // --- Load Head Model ---
-        function loadHeadModel() {
-            // Try to load from models/head/ directory
-            // If not available, create a placeholder head
-            loader.load('./models/head/scene.gltf',
-                (gltf) => {
-                    headModel = gltf.scene;
-
-                    // Normalize size
-                    const box = new THREE.Box3().setFromObject(headModel);
-                    const size = box.getSize(new THREE.Vector3());
-                    const center = box.getCenter(new THREE.Vector3());
-
-                    const maxDim = Math.max(size.x, size.y, size.z);
-                    const fitScale = 15.0 / maxDim;
-
-                    headModel.scale.setScalar(fitScale);
-                    headModel.position.sub(center.multiplyScalar(fitScale));
-
-                    modelGroup.add(headModel);
-
-                    // Find bones for animation
-                    headModel.traverse(obj => {
-                        if (obj.isBone) {
-                            const name = obj.name.toLowerCase();
-                            if (name.includes('head') && !headBone) headBone = obj;
-                            if (name.includes('neck') && !neckBone) neckBone = obj;
-                        }
-                        if (obj.isMesh) {
-                            obj.castShadow = true;
-                            obj.receiveShadow = true;
-                            const name = obj.name.toLowerCase();
-                            if (name.includes('eye') && name.includes('left')) eyeLeft = obj;
-                            if (name.includes('eye') && name.includes('right')) eyeRight = obj;
-                        }
-                    });
-
-                    // Handle animations
-                    if (gltf.animations && gltf.animations.length > 0) {
-                        mixer = new THREE.AnimationMixer(headModel);
-                        gltf.animations.forEach(clip => {
-                            mixer.clipAction(clip).play();
-                        });
-                    }
-
-                    updateModelTransform();
-                    console.log('Head model loaded successfully');
-                },
-                undefined,
-                (err) => {
-                    console.log('No custom head model found, creating placeholder head');
-                    createPlaceholderHead();
-                }
-            );
-        }
-
-        // --- Create Placeholder Head ---
-        function createPlaceholderHead() {
-            const headGroup = new THREE.Group();
-
-            // Head sphere
-            const headGeo = new THREE.SphereGeometry(5, 32, 32);
-            const headMat = new THREE.MeshStandardMaterial({
-                color: 0xd4a574,
-                roughness: 0.7,
-                metalness: 0.1
-            });
-            const head = new THREE.Mesh(headGeo, headMat);
-            head.scale.set(1, 1.2, 1);
-            headGroup.add(head);
-
-            // Eyes
-            const eyeGeo = new THREE.SphereGeometry(0.8, 16, 16);
-            const eyeWhiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
-            const pupilGeo = new THREE.SphereGeometry(0.4, 16, 16);
-            const pupilMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
-
-            // Left eye
-            const leftEyeGroup = new THREE.Group();
-            const leftEyeWhite = new THREE.Mesh(eyeGeo, eyeWhiteMat);
-            const leftPupil = new THREE.Mesh(pupilGeo, pupilMat);
-            leftPupil.position.z = 0.5;
-            leftEyeGroup.add(leftEyeWhite);
-            leftEyeGroup.add(leftPupil);
-            leftEyeGroup.position.set(-1.8, 1.5, 4);
-            headGroup.add(leftEyeGroup);
-            eyeLeft = leftEyeGroup;
-
-            // Right eye
-            const rightEyeGroup = new THREE.Group();
-            const rightEyeWhite = new THREE.Mesh(eyeGeo, eyeWhiteMat);
-            const rightPupil = new THREE.Mesh(pupilGeo, pupilMat);
-            rightPupil.position.z = 0.5;
-            rightEyeGroup.add(rightEyeWhite);
-            rightEyeGroup.add(rightPupil);
-            rightEyeGroup.position.set(1.8, 1.5, 4);
-            headGroup.add(rightEyeGroup);
-            eyeRight = rightEyeGroup;
-
-            // Nose
-            const noseGeo = new THREE.ConeGeometry(0.5, 1.5, 8);
-            const noseMat = new THREE.MeshStandardMaterial({ color: 0xc49a6c });
-            const nose = new THREE.Mesh(noseGeo, noseMat);
-            nose.rotation.x = Math.PI / 2;
-            nose.position.set(0, 0, 5);
-            headGroup.add(nose);
-
-            // Mouth
-            const mouthGeo = new THREE.TorusGeometry(1, 0.2, 8, 16, Math.PI);
-            const mouthMat = new THREE.MeshStandardMaterial({ color: 0x8b4545 });
-            const mouth = new THREE.Mesh(mouthGeo, mouthMat);
-            mouth.rotation.x = Math.PI;
-            mouth.position.set(0, -2, 4);
-            headGroup.add(mouth);
-
-            headModel = headGroup;
-            modelGroup.add(headGroup);
-            updateModelTransform();
-
-            console.log('Placeholder head created');
-        }
-
-        // Load initial model
-        loadHeadModel();
         setupControls();
 
         // --- Off-Axis Projection ---
@@ -504,61 +633,51 @@
             const halfH = SCREEN_HEIGHT_CM / 2;
             const scale = NEAR / dist;
 
-            const left = (-halfW - head.x) * scale;
-            const right = (halfW - head.x) * scale;
-            const bottom = (-halfH - head.y) * scale;
-            const top = (halfH - head.y) * scale;
-
-            camera.projectionMatrix.makePerspective(left, right, top, bottom, NEAR, FAR);
+            camera.projectionMatrix.makePerspective(
+                (-halfW - head.x) * scale,
+                (halfW - head.x) * scale,
+                (halfH - head.y) * scale,
+                (-halfH - head.y) * scale,
+                NEAR, FAR
+            );
         }
 
-        // --- Make Head Look at Viewer ---
+        // --- Head Look-At ---
         function updateHeadLookAt() {
-            if (!headModel) return;
+            if (!headGroup) return;
 
-            // Calculate direction to viewer
             const viewerPos = state.viewerPosition.clone();
+            const headPos = new THREE.Vector3();
+            headGroup.getWorldPosition(headPos);
+            const lookDir = viewerPos.clone().sub(headPos);
 
-            // Convert viewer position to model's local space
-            const modelWorldPos = new THREE.Vector3();
-            modelGroup.getWorldPosition(modelWorldPos);
-
-            const lookDir = viewerPos.clone().sub(modelWorldPos);
-
-            // Calculate rotation angles
+            // Calculate angles
             const angleY = Math.atan2(lookDir.x, lookDir.z) * params.headTrackStrength;
             const angleX = Math.atan2(-lookDir.y, Math.sqrt(lookDir.x * lookDir.x + lookDir.z * lookDir.z)) * params.headTrackStrength;
 
-            // Clamp angles to realistic head movement range
-            const maxRotY = Math.PI / 3; // 60 degrees
-            const maxRotX = Math.PI / 4; // 45 degrees
+            const maxRotY = Math.PI / 2.5;
+            const maxRotX = Math.PI / 3;
 
             const targetRotY = THREE.MathUtils.clamp(angleY, -maxRotY, maxRotY);
             const targetRotX = THREE.MathUtils.clamp(angleX, -maxRotX, maxRotX);
 
-            // Apply to head bone if available, otherwise to model
-            if (headBone) {
-                headBone.rotation.y = THREE.MathUtils.lerp(headBone.rotation.y, targetRotY, params.smoothing * 2);
-                headBone.rotation.x = THREE.MathUtils.lerp(headBone.rotation.x, targetRotX, params.smoothing * 2);
-            } else if (headModel) {
-                // For non-rigged models, rotate the whole head
-                headModel.rotation.y = THREE.MathUtils.lerp(headModel.rotation.y, targetRotY, params.smoothing * 2);
-                headModel.rotation.x = THREE.MathUtils.lerp(headModel.rotation.x, targetRotX, params.smoothing * 2);
-            }
+            // Smooth rotation
+            headGroup.rotation.y = THREE.MathUtils.lerp(headGroup.rotation.y, targetRotY, params.smoothing * 1.5);
+            headGroup.rotation.x = THREE.MathUtils.lerp(headGroup.rotation.x, targetRotX, params.smoothing * 1.5);
 
-            // Eye tracking (more subtle, faster response)
-            if (eyeLeft && eyeRight) {
+            // Eye tracking (faster, more responsive)
+            if (eyeLeftGroup && eyeRightGroup) {
                 const eyeAngleY = angleY * params.eyeTrackStrength;
                 const eyeAngleX = angleX * params.eyeTrackStrength;
 
-                const maxEyeRot = Math.PI / 6; // 30 degrees
+                const maxEyeRot = Math.PI / 4;
                 const eyeTargetY = THREE.MathUtils.clamp(eyeAngleY, -maxEyeRot, maxEyeRot);
                 const eyeTargetX = THREE.MathUtils.clamp(eyeAngleX, -maxEyeRot, maxEyeRot);
 
-                eyeLeft.rotation.y = THREE.MathUtils.lerp(eyeLeft.rotation.y, eyeTargetY, params.smoothing * 3);
-                eyeLeft.rotation.x = THREE.MathUtils.lerp(eyeLeft.rotation.x, eyeTargetX, params.smoothing * 3);
-                eyeRight.rotation.y = THREE.MathUtils.lerp(eyeRight.rotation.y, eyeTargetY, params.smoothing * 3);
-                eyeRight.rotation.x = THREE.MathUtils.lerp(eyeRight.rotation.x, eyeTargetX, params.smoothing * 3);
+                eyeLeftGroup.rotation.y = THREE.MathUtils.lerp(eyeLeftGroup.rotation.y, eyeTargetY, params.smoothing * 2.5);
+                eyeLeftGroup.rotation.x = THREE.MathUtils.lerp(eyeLeftGroup.rotation.x, eyeTargetX, params.smoothing * 2.5);
+                eyeRightGroup.rotation.y = THREE.MathUtils.lerp(eyeRightGroup.rotation.y, eyeTargetY, params.smoothing * 2.5);
+                eyeRightGroup.rotation.x = THREE.MathUtils.lerp(eyeRightGroup.rotation.x, eyeTargetX, params.smoothing * 2.5);
             }
         }
 
@@ -604,25 +723,23 @@
                             const wx = (0.5 - cx) * SCREEN_WIDTH_CM * SENSITIVITY;
                             const wy = (0.5 - cy) * SCREEN_HEIGHT_CM * SENSITIVITY * 0.8;
 
-                            const LIMIT_X = 50;
-                            const LIMIT_Y = 50;
-
                             state.targetHead.set(
-                                THREE.MathUtils.clamp(wx, -LIMIT_X, LIMIT_X),
-                                THREE.MathUtils.clamp(wy, -LIMIT_Y, LIMIT_Y),
+                                THREE.MathUtils.clamp(wx, -50, 50),
+                                THREE.MathUtils.clamp(wy, -50, 50),
                                 z
                             );
 
-                            // Debug visualization
-                            ctx.fillStyle = '#00ff00';
+                            // Debug viz
+                            ctx.fillStyle = '#00ffff';
+                            ctx.shadowColor = '#00ffff';
+                            ctx.shadowBlur = 10;
                             ctx.beginPath();
-                            ctx.arc(cx * canvas.width, cy * canvas.height, 5, 0, 6.28);
+                            ctx.arc(cx * canvas.width, cy * canvas.height, 4, 0, Math.PI * 2);
                             ctx.fill();
 
-                            // Draw tracking info
-                            ctx.fillStyle = '#00ff00';
-                            ctx.font = '10px monospace';
-                            ctx.fillText(`Z: ${z.toFixed(1)}cm`, 5, 15);
+                            ctx.font = '10px Courier New';
+                            ctx.fillText(`DIST: ${z.toFixed(0)}cm`, 5, 15);
+                            ctx.fillText(`X: ${wx.toFixed(1)}`, 5, 27);
                         }
                     }
                 });
@@ -638,13 +755,12 @@
 
             } catch (e) {
                 console.error(e);
-                document.getElementById('status').innerText = "Error starting camera: " + e.message;
+                document.getElementById('status').innerText = "ERROR: " + e.message;
             }
         }
 
-        // --- Event Listeners ---
         document.getElementById('start-btn').addEventListener('click', () => {
-            document.getElementById('status').innerText = "Initializing Camera...";
+            document.getElementById('status').innerText = "INITIALIZING NEURAL LINK...";
             startTracking();
         });
 
@@ -656,20 +772,29 @@
             const delta = clock.getDelta();
             const time = clock.getElapsedTime();
 
-            if (gridUniforms) {
-                gridUniforms.time.value = time * params.gridSpeed;
+            // Update uniforms
+            if (gridUniforms) gridUniforms.time.value = time * params.gridSpeed;
+            if (headPointsUniforms) {
+                headPointsUniforms.time.value = time * params.pulseSpeed;
+                headPointsUniforms.glowIntensity.value = params.glowIntensity;
+                headPointsUniforms.size.value = params.particleSize;
+            }
+            if (headWireUniforms) {
+                headWireUniforms.time.value = time * params.pulseSpeed;
+                headWireUniforms.opacity.value = params.wireframeOpacity;
             }
 
-            if (mixer) mixer.update(delta);
+            // Update eye materials
+            if (eyeLeftGroup) {
+                eyeLeftGroup.children[0].material.uniforms.time.value = time;
+                eyeRightGroup.children[0].material.uniforms.time.value = time;
+            }
 
-            // Smooth head tracking
+            // Smooth tracking
             state.head.lerp(state.targetHead, params.smoothing);
             state.viewerPosition.copy(state.head);
 
-            // Update camera projection
             updateCamera(state.head);
-
-            // Make the 3D head look at viewer
             updateHeadLookAt();
 
             renderer.render(scene, camera);
@@ -680,20 +805,17 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // --- Fullscreen Toggle ---
         document.getElementById('fullscreen-btn').addEventListener('click', () => {
             if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen().catch(err => {
-                    console.warn('Fullscreen request failed:', err);
-                });
+                document.documentElement.requestFullscreen().catch(console.warn);
             } else {
                 document.exitFullscreen();
             }
         });
 
         document.addEventListener('fullscreenchange', () => {
-            const btn = document.getElementById('fullscreen-btn');
-            btn.textContent = document.fullscreenElement ? 'EXIT FULLSCREEN' : 'FULLSCREEN';
+            document.getElementById('fullscreen-btn').textContent =
+                document.fullscreenElement ? '[ EXIT ]' : '[ FULLSCREEN ]';
         });
     </script>
 </body>
