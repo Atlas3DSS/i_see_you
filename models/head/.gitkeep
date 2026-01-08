@@ -1,0 +1,16 @@
+# Place your GLTF head model here
+# Expected structure:
+# models/head/scene.gltf
+# models/head/textures/
+#
+# The model should ideally have:
+# - A bone named "head" or "Head" for head rotation
+# - A bone named "neck" or "Neck" (optional)
+# - Meshes named "eye_left" and "eye_right" for eye tracking (optional)
+#
+# If no model is found, a placeholder head will be created automatically.
+#
+# Recommended free head models:
+# - Sketchfab (search for "head rigged")
+# - Mixamo (character heads)
+# - ReadyPlayerMe avatars

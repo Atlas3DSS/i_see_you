@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large model files (add your models locally)
+# Uncomment to ignore model files:
+# models/**/*.bin
+# models/**/*.glb
