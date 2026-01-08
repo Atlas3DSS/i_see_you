@@ -1082,43 +1082,12 @@
                             }
                         });
 
-                        // Auto-scale and position the model
-                        const box = new THREE.Box3().setFromObject(gltfModel);
-                        const size = box.getSize(new THREE.Vector3());
-                        const center = box.getCenter(new THREE.Vector3());
-
-                        // For full-body models, we want to show mainly the head
-                        // Detect if this is a full body (height >> width)
-                        const isFullBody = size.y > size.x * 1.5;
-
-                        let scale, yOffset;
-                        if (isFullBody) {
-                            // Scale based on approximate head size (about 1/7 of body height)
-                            const headSize = size.y / 7;
-                            const targetSize = 16;
-                            scale = targetSize / headSize;
-
-                            // Position so head is roughly centered
-                            // Head is at top ~1/7 of body
-                            yOffset = -size.y * scale * 0.35; // Move down so head is visible
-                            console.log('Detected full-body model, focusing on head');
-                        } else {
-                            // Just a head model - scale normally
-                            const maxDim = Math.max(size.x, size.y, size.z);
-                            const targetSize = 16;
-                            scale = targetSize / maxDim;
-                            yOffset = -center.y * scale;
-                        }
-
-                        gltfModel.scale.setScalar(scale);
-                        gltfModel.position.x = -center.x * scale;
-                        gltfModel.position.y = yOffset;
-                        gltfModel.position.z = -center.z * scale;
-
+                        // Add model to group and scene
                         headGroup.add(gltfModel);
                         scene.add(headGroup);
 
-                        headGroup.position.z = params.modelZ;
+                        // Apply initial transform
+                        applyModelTransform();
 
                         // Setup animation mixer if model has animations
                         if (gltf.animations && gltf.animations.length > 0) {
@@ -1173,22 +1142,17 @@
 
         // Apply scale and position to model
         function applyModelTransform() {
-            if (!gltfModel) return;
+            if (!gltfModel || !headGroup) return;
 
+            // Simply set scale
             gltfModel.scale.setScalar(animState.modelScale);
 
-            // Center horizontally and position vertically
-            const box = new THREE.Box3().setFromObject(gltfModel);
-            const center = box.getCenter(new THREE.Vector3());
+            // Position the model within headGroup
+            gltfModel.position.set(0, animState.modelY, 0);
 
-            gltfModel.position.x = -center.x * animState.modelScale;
-            gltfModel.position.y = animState.modelY;
-            gltfModel.position.z = -center.z * animState.modelScale;
-
-            if (headGroup) {
-                headGroup.position.x = animState.position;
-                headGroup.position.z = params.modelZ;
-            }
+            // Position the headGroup in the scene
+            headGroup.position.x = animState.position;
+            headGroup.position.z = params.modelZ;
         }
 
         // Initial model load
