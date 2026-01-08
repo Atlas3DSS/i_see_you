@@ -237,16 +237,23 @@
         let gltfMixer = null;
         const gltfLoader = new GLTFLoader();
 
-        // Walking state
-        const walkState = {
-            isWalking: true,
+        // Animation/Movement state
+        const animState = {
+            currentAnim: 'standing',  // 'standing', 'walking', 'dancing'
             direction: 1,  // 1 = right, -1 = left
             position: 0,
-            speed: 2.0,
-            range: 12.0,   // How far to walk from center
-            walkAction: null,
-            idleAction: null,
-            currentAction: null
+            speed: 3.0,
+            leftBound: -8.0,   // Left edge of walking zone
+            rightBound: 8.0,   // Right edge of walking zone
+            modelScale: 0.12,  // Scale for the model
+            modelY: -8.0       // Vertical position
+        };
+
+        // Available models
+        const modelFiles = {
+            standing: 'models/human_female_model/human_female_standing.glb',
+            walking: 'models/human_female_model/human_female_walking.glb',
+            dancing: 'models/human_female_model/human_female_dancing.glb'
         };
 
         // Blink state
@@ -1118,37 +1125,16 @@
                             gltfMixer = new THREE.AnimationMixer(gltfModel);
                             console.log('Model has', gltf.animations.length, 'animations:');
 
-                            // Log available animations and find walk/idle
+                            // Log available animations
                             gltf.animations.forEach((clip, i) => {
                                 console.log(`  ${i}: ${clip.name} (${clip.duration.toFixed(2)}s)`);
-                                const clipName = clip.name.toLowerCase();
-
-                                // Find walk animation
-                                if (clipName.includes('walk') || clipName.includes('locomotion') ||
-                                    clipName.includes('run') || clipName.includes('moving')) {
-                                    walkState.walkAction = gltfMixer.clipAction(clip);
-                                    console.log('  -> Using as WALK animation');
-                                }
-
-                                // Find idle animation
-                                if (clipName.includes('idle') || clipName.includes('stand') ||
-                                    clipName.includes('breathe') || clipName.includes('rest')) {
-                                    walkState.idleAction = gltfMixer.clipAction(clip);
-                                    console.log('  -> Using as IDLE animation');
-                                }
                             });
 
-                            // If no specific walk found, try first animation
-                            if (!walkState.walkAction && gltf.animations.length > 0) {
-                                walkState.walkAction = gltfMixer.clipAction(gltf.animations[0]);
-                                console.log('Using first animation as walk');
-                            }
-
-                            // Start walk animation if found
-                            if (walkState.walkAction) {
-                                walkState.walkAction.play();
-                                walkState.currentAction = walkState.walkAction;
-                            }
+                            // Play all animations in the file (they're usually meant to loop together)
+                            gltf.animations.forEach(clip => {
+                                const action = gltfMixer.clipAction(clip);
+                                action.play();
+                            });
                         }
 
                         params.useGLTFModel = true;
@@ -1167,68 +1153,102 @@
             });
         }
 
-        // Try to load GLTF model, fall back to procedural head
-        const modelPaths = [
-            'models/human_female_model/human_female.glb',
-            'models/head/scene.gltf',
-            'models/head/scene.glb'
-        ];
-
-        async function tryLoadModels() {
-            for (const path of modelPaths) {
-                try {
-                    console.log('Trying to load model from:', path);
-                    await loadGLTFHead(path);
-                    console.log('Successfully loaded model from:', path);
-                    return;
-                } catch (e) {
-                    console.log('Could not load from:', path, e.message || e);
-                }
+        // Switch to a different animation model
+        async function switchAnimation(animName) {
+            if (!modelFiles[animName]) {
+                console.error('Unknown animation:', animName);
+                return;
             }
-            // If all paths fail, use procedural head
-            console.log('No GLTF model found, creating procedural head');
-            createCyberpunkHead();
+
+            console.log('Switching to animation:', animName);
+            animState.currentAnim = animName;
+
+            try {
+                await loadGLTFHead(modelFiles[animName]);
+                applyModelTransform();
+            } catch (e) {
+                console.error('Failed to load animation:', animName, e);
+            }
         }
 
-        tryLoadModels().catch(err => {
-            console.error('Error in tryLoadModels:', err);
-            createCyberpunkHead();
-        });
+        // Apply scale and position to model
+        function applyModelTransform() {
+            if (!gltfModel) return;
+
+            gltfModel.scale.setScalar(animState.modelScale);
+
+            // Center horizontally and position vertically
+            const box = new THREE.Box3().setFromObject(gltfModel);
+            const center = box.getCenter(new THREE.Vector3());
+
+            gltfModel.position.x = -center.x * animState.modelScale;
+            gltfModel.position.y = animState.modelY;
+            gltfModel.position.z = -center.z * animState.modelScale;
+
+            if (headGroup) {
+                headGroup.position.x = animState.position;
+                headGroup.position.z = params.modelZ;
+            }
+        }
+
+        // Initial model load
+        async function initModel() {
+            try {
+                await loadGLTFHead(modelFiles[animState.currentAnim]);
+                applyModelTransform();
+                console.log('Model loaded successfully');
+            } catch (e) {
+                console.error('Failed to load model, using procedural head:', e);
+                createCyberpunkHead();
+            }
+        }
+
+        initModel();
 
         // --- Controls ---
         function setupControls() {
             const gui = new dat.GUI();
 
-            const folderHead = gui.addFolder('Head');
-            folderHead.add(params, 'modelScale', 0.5, 2.0).name('Scale').onChange(v => {
-                headGroup.scale.setScalar(v);
+            // Animation selection
+            const animOptions = { animation: 'standing' };
+            const folderAnim = gui.addFolder('Animation');
+            folderAnim.add(animOptions, 'animation', ['standing', 'walking', 'dancing'])
+                .name('Mode')
+                .onChange(v => switchAnimation(v));
+            folderAnim.open();
+
+            const folderModel = gui.addFolder('Model');
+            folderModel.add(animState, 'modelScale', 0.05, 0.5).name('Scale').onChange(v => {
+                if (gltfModel) {
+                    gltfModel.scale.setScalar(v);
+                    applyModelTransform();
+                }
             });
-            folderHead.add(params, 'modelZ', -50, 0).name('Depth').onChange(v => {
-                headGroup.position.z = v;
+            folderModel.add(animState, 'modelY', -20, 5).name('Height').onChange(v => {
+                if (gltfModel) {
+                    applyModelTransform();
+                }
             });
-            folderHead.add(params, 'modelY', -10, 10).name('Height').onChange(v => {
-                headGroup.position.y = v;
+            folderModel.add(params, 'modelZ', -60, -10).name('Depth').onChange(v => {
+                if (headGroup) headGroup.position.z = v;
             });
-            folderHead.open();
+            folderModel.open();
+
+            const folderWalk = gui.addFolder('Walking Zone');
+            folderWalk.add(animState, 'leftBound', -20, 0).name('Left Bound');
+            folderWalk.add(animState, 'rightBound', 0, 20).name('Right Bound');
+            folderWalk.add(animState, 'speed', 0.5, 10.0).name('Walk Speed');
+            folderWalk.add(animState, 'position', -20, 20).name('Position').listen();
+            folderWalk.open();
 
             const folderTracking = gui.addFolder('Tracking');
             folderTracking.add(params, 'headTrackStrength', 0, 2.0).name('Head Response');
             folderTracking.add(params, 'eyeTrackStrength', 0, 1.5).name('Eye Response');
             folderTracking.add(params, 'verticalSensitivity', 0.5, 3.0).name('Vertical Sens.');
-            folderTracking.add(params, 'headTilt', 0, 1.0).name('Head Tilt');
             folderTracking.add(params, 'smoothing', 0.02, 0.2).name('Smoothing');
             folderTracking.add(params, 'showDebug').name('Show Webcam').onChange(val => {
                 document.getElementById('debug-canvas').style.display = val ? 'block' : 'none';
             });
-            folderTracking.open();
-
-            const folderBehavior = gui.addFolder('Behavior');
-            folderBehavior.add(params, 'blinkRate', 0.2, 3.0).name('Blink Rate');
-            folderBehavior.add(params, 'idleMotion', 0, 1.5).name('Idle Motion');
-            folderBehavior.add(walkState, 'isWalking').name('Walk Back/Forth');
-            folderBehavior.add(walkState, 'speed', 0.5, 8.0).name('Walk Speed');
-            folderBehavior.add(walkState, 'range', 5, 25).name('Walk Range');
-            folderBehavior.open();
 
             const folderEnvironment = gui.addFolder('Tunnel');
             folderEnvironment.add(params, 'tunnelShift', 0, 2.0).name('Parallax Shift');
@@ -1324,35 +1344,43 @@
         function updateWalking(time, delta) {
             if (!params.useGLTFModel || !headGroup) return;
 
-            if (walkState.isWalking) {
+            // Only move if walking animation is active
+            if (animState.currentAnim === 'walking') {
                 // Move position
-                walkState.position += walkState.direction * walkState.speed * delta;
+                animState.position += animState.direction * animState.speed * delta;
 
                 // Check bounds and reverse direction
-                if (walkState.position > walkState.range) {
-                    walkState.position = walkState.range;
-                    walkState.direction = -1;
-                } else if (walkState.position < -walkState.range) {
-                    walkState.position = -walkState.range;
-                    walkState.direction = 1;
+                if (animState.position > animState.rightBound) {
+                    animState.position = animState.rightBound;
+                    animState.direction = -1;
+                } else if (animState.position < animState.leftBound) {
+                    animState.position = animState.leftBound;
+                    animState.direction = 1;
                 }
 
                 // Apply position to model
-                headGroup.position.x = walkState.position;
+                headGroup.position.x = animState.position;
 
                 // Rotate model to face walking direction
-                // But blend with looking at viewer
-                const walkRotation = walkState.direction > 0 ? -Math.PI / 6 : Math.PI / 6;
-
-                // Smooth base rotation for walking direction
                 if (gltfModel) {
-                    const targetWalkRot = walkState.direction > 0 ? -0.3 : 0.3;
+                    const targetWalkRot = animState.direction > 0 ? -Math.PI / 2 : Math.PI / 2;
                     gltfModel.rotation.y = THREE.MathUtils.lerp(
                         gltfModel.rotation.y,
                         targetWalkRot,
+                        params.smoothing * 2
+                    );
+                }
+            } else {
+                // Standing or dancing - face forward (toward viewer)
+                if (gltfModel) {
+                    gltfModel.rotation.y = THREE.MathUtils.lerp(
+                        gltfModel.rotation.y,
+                        0,
                         params.smoothing
                     );
                 }
+                // Keep at current position (or center)
+                headGroup.position.x = animState.position;
             }
         }
 
