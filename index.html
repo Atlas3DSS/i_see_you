@@ -245,8 +245,8 @@
             speed: 3.0,
             leftBound: -8.0,   // Left edge of walking zone
             rightBound: 8.0,   // Right edge of walking zone
-            modelScale: 0.12,  // Scale for the model
-            modelY: -8.0       // Vertical position
+            modelScale: 8.0,   // Scale for the model (much larger default)
+            modelY: -12.0      // Vertical position
         };
 
         // Available models
@@ -299,7 +299,7 @@
 
         const params = {
             modelScale: 1.0,
-            modelZ: -25.0,
+            modelZ: -15.0,
             modelY: 0.0,
             headTrackStrength: 1.2,
             eyeTrackStrength: 0.8,
@@ -1218,18 +1218,17 @@
             folderAnim.open();
 
             const folderModel = gui.addFolder('Model');
-            folderModel.add(animState, 'modelScale', 0.05, 0.5).name('Scale').onChange(v => {
-                if (gltfModel) {
-                    gltfModel.scale.setScalar(v);
-                    applyModelTransform();
-                }
-            });
-            folderModel.add(animState, 'modelY', -20, 5).name('Height').onChange(v => {
+            folderModel.add(animState, 'modelScale', 1, 30).name('Scale').onChange(v => {
                 if (gltfModel) {
                     applyModelTransform();
                 }
             });
-            folderModel.add(params, 'modelZ', -60, -10).name('Depth').onChange(v => {
+            folderModel.add(animState, 'modelY', -30, 10).name('Height').onChange(v => {
+                if (gltfModel) {
+                    applyModelTransform();
+                }
+            });
+            folderModel.add(params, 'modelZ', -50, 0).name('Depth').onChange(v => {
                 if (headGroup) headGroup.position.z = v;
             });
             folderModel.open();
