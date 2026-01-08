@@ -164,8 +164,26 @@
         let headGroup = null;
         let eyeLeftGroup = null;
         let eyeRightGroup = null;
+        let eyelidLeft = null;
+        let eyelidRight = null;
         let headPointsUniforms = null;
         let headWireUniforms = null;
+
+        // Blink state
+        const blinkState = {
+            isBlinking: false,
+            blinkProgress: 0,
+            nextBlinkTime: 2 + Math.random() * 3,
+            blinkDuration: 0.15
+        };
+
+        // User eye positions (from webcam)
+        const userEyes = {
+            left: new THREE.Vector2(0.5, 0.5),
+            right: new THREE.Vector2(0.5, 0.5),
+            centerX: 0.5,
+            centerY: 0.5
+        };
 
         const params = {
             modelScale: 1.0,
@@ -179,7 +197,10 @@
             pulseSpeed: 1.0,
             particleSize: 2.5,
             wireframeOpacity: 0.4,
-            gridSpeed: 2.0
+            gridSpeed: 2.0,
+            blinkRate: 1.0,
+            idleMotion: 0.5,
+            headTilt: 0.3
         };
 
         const SCREEN_WIDTH_CM = 30.0;
@@ -584,6 +605,98 @@
             const rightPupil = new THREE.Mesh(pupilGeo, pupilMat.clone());
             rightPupil.position.z = 0.9;
             eyeRightGroup.add(rightPupil);
+
+            // Create eyelids for blinking
+            const eyelidGeometry = new THREE.PlaneGeometry(3, 1.5);
+            const eyelidMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    color: { value: new THREE.Color(0x00ffff) },
+                    opacity: { value: 0.9 }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 color;
+                    uniform float opacity;
+                    varying vec2 vUv;
+                    void main() {
+                        // Curved eyelid shape
+                        float curve = 1.0 - pow(abs(vUv.x - 0.5) * 2.0, 2.0);
+                        float edge = smoothstep(0.0, 0.3, vUv.y) * smoothstep(1.0, 0.7, vUv.y);
+                        float alpha = curve * edge * opacity;
+                        // Grid pattern
+                        float grid = step(0.9, fract(vUv.x * 8.0)) + step(0.9, fract(vUv.y * 4.0));
+                        vec3 finalColor = color * (0.3 + grid * 0.7);
+                        gl_FragColor = vec4(finalColor, alpha * 0.95);
+                    }
+                `,
+                transparent: true,
+                side: THREE.DoubleSide,
+                depthWrite: false
+            });
+
+            // Left eyelid (upper)
+            eyelidLeft = new THREE.Mesh(eyelidGeometry, eyelidMaterial.clone());
+            eyelidLeft.position.set(0, 1.5, 1.3);
+            eyelidLeft.rotation.x = Math.PI * 0.1;
+            eyelidLeft.scale.y = 0; // Start open
+            eyeLeftGroup.add(eyelidLeft);
+
+            // Right eyelid (upper)
+            eyelidRight = new THREE.Mesh(eyelidGeometry, eyelidMaterial.clone());
+            eyelidRight.position.set(0, 1.5, 1.3);
+            eyelidRight.rotation.x = Math.PI * 0.1;
+            eyelidRight.scale.y = 0; // Start open
+            eyeRightGroup.add(eyelidRight);
+        }
+
+        // Blink animation
+        function updateBlink(time, delta) {
+            // Check if it's time to blink
+            if (!blinkState.isBlinking && time > blinkState.nextBlinkTime) {
+                blinkState.isBlinking = true;
+                blinkState.blinkProgress = 0;
+            }
+
+            if (blinkState.isBlinking) {
+                blinkState.blinkProgress += delta / blinkState.blinkDuration;
+
+                // Blink curve: quick close, quick open
+                let lidPosition;
+                if (blinkState.blinkProgress < 0.5) {
+                    // Closing
+                    lidPosition = Math.sin(blinkState.blinkProgress * Math.PI);
+                } else {
+                    // Opening
+                    lidPosition = Math.sin(blinkState.blinkProgress * Math.PI);
+                }
+
+                // Apply to eyelids
+                if (eyelidLeft && eyelidRight) {
+                    eyelidLeft.scale.y = lidPosition;
+                    eyelidRight.scale.y = lidPosition;
+                    eyelidLeft.position.y = 1.5 - lidPosition * 0.8;
+                    eyelidRight.position.y = 1.5 - lidPosition * 0.8;
+                }
+
+                // End blink
+                if (blinkState.blinkProgress >= 1.0) {
+                    blinkState.isBlinking = false;
+                    blinkState.blinkProgress = 0;
+                    // Random interval: 2-6 seconds, affected by blinkRate
+                    blinkState.nextBlinkTime = time + (2 + Math.random() * 4) / params.blinkRate;
+
+                    // Occasional double-blink
+                    if (Math.random() < 0.2) {
+                        blinkState.nextBlinkTime = time + 0.2;
+                    }
+                }
+            }
         }
 
         createCyberpunkHead();
@@ -607,11 +720,17 @@
             const folderTracking = gui.addFolder('Tracking');
             folderTracking.add(params, 'headTrackStrength', 0, 2.0).name('Head Response');
             folderTracking.add(params, 'eyeTrackStrength', 0, 1.5).name('Eye Response');
+            folderTracking.add(params, 'headTilt', 0, 1.0).name('Head Tilt');
             folderTracking.add(params, 'smoothing', 0.02, 0.2).name('Smoothing');
             folderTracking.add(params, 'showDebug').name('Show Webcam').onChange(val => {
                 document.getElementById('debug-canvas').style.display = val ? 'block' : 'none';
             });
             folderTracking.open();
+
+            const folderBehavior = gui.addFolder('Behavior');
+            folderBehavior.add(params, 'blinkRate', 0.2, 3.0).name('Blink Rate');
+            folderBehavior.add(params, 'idleMotion', 0, 1.5).name('Idle Motion');
+            folderBehavior.open();
 
             const folderVisuals = gui.addFolder('Visuals');
             folderVisuals.add(params, 'glowIntensity', 0.5, 3.0).name('Glow');
@@ -642,8 +761,8 @@
             );
         }
 
-        // --- Head Look-At ---
-        function updateHeadLookAt() {
+        // --- Head Look-At with Idle Motion ---
+        function updateHeadLookAt(time) {
             if (!headGroup) return;
 
             const viewerPos = state.viewerPosition.clone();
@@ -651,33 +770,78 @@
             headGroup.getWorldPosition(headPos);
             const lookDir = viewerPos.clone().sub(headPos);
 
-            // Calculate angles
+            // Calculate base angles for tracking
             const angleY = Math.atan2(lookDir.x, lookDir.z) * params.headTrackStrength;
             const angleX = Math.atan2(-lookDir.y, Math.sqrt(lookDir.x * lookDir.x + lookDir.z * lookDir.z)) * params.headTrackStrength;
 
+            // Add head tilt (Z rotation) based on horizontal movement
+            const angleZ = -angleY * params.headTilt * 0.3;
+
+            // Add subtle idle motion (breathing, micro-movements)
+            const idleY = Math.sin(time * 0.5) * 0.02 * params.idleMotion;
+            const idleX = Math.sin(time * 0.3) * 0.015 * params.idleMotion;
+            const idleZ = Math.sin(time * 0.7) * 0.01 * params.idleMotion;
+
             const maxRotY = Math.PI / 2.5;
             const maxRotX = Math.PI / 3;
+            const maxRotZ = Math.PI / 8;
 
-            const targetRotY = THREE.MathUtils.clamp(angleY, -maxRotY, maxRotY);
-            const targetRotX = THREE.MathUtils.clamp(angleX, -maxRotX, maxRotX);
+            const targetRotY = THREE.MathUtils.clamp(angleY + idleY, -maxRotY, maxRotY);
+            const targetRotX = THREE.MathUtils.clamp(angleX + idleX, -maxRotX, maxRotX);
+            const targetRotZ = THREE.MathUtils.clamp(angleZ + idleZ, -maxRotZ, maxRotZ);
 
-            // Smooth rotation
+            // Smooth rotation with all three axes
             headGroup.rotation.y = THREE.MathUtils.lerp(headGroup.rotation.y, targetRotY, params.smoothing * 1.5);
             headGroup.rotation.x = THREE.MathUtils.lerp(headGroup.rotation.x, targetRotX, params.smoothing * 1.5);
+            headGroup.rotation.z = THREE.MathUtils.lerp(headGroup.rotation.z, targetRotZ, params.smoothing * 1.2);
 
-            // Eye tracking (faster, more responsive)
+            // Direct eye-to-eye contact tracking
+            // Use the user's individual eye positions for more precise gaze
             if (eyeLeftGroup && eyeRightGroup) {
-                const eyeAngleY = angleY * params.eyeTrackStrength;
-                const eyeAngleX = angleX * params.eyeTrackStrength;
+                // Calculate where each of the 3D head's eyes should look
+                // to meet the user's eyes directly
+
+                // User's left eye position in world space (relative to screen center)
+                const userLeftEyeX = (0.5 - userEyes.left.x) * SCREEN_WIDTH_CM * 2.5;
+                const userLeftEyeY = (0.5 - userEyes.left.y) * SCREEN_HEIGHT_CM * 2.0;
+
+                // User's right eye position
+                const userRightEyeX = (0.5 - userEyes.right.x) * SCREEN_WIDTH_CM * 2.5;
+                const userRightEyeY = (0.5 - userEyes.right.y) * SCREEN_HEIGHT_CM * 2.0;
+
+                // 3D head's left eye should look at user's right eye (mirror)
+                // 3D head's right eye should look at user's left eye (mirror)
+                const leftEyeLookX = userRightEyeX;
+                const leftEyeLookY = userRightEyeY;
+                const rightEyeLookX = userLeftEyeX;
+                const rightEyeLookY = userLeftEyeY;
+
+                // Calculate individual eye angles
+                const eyeZ = state.viewerPosition.z;
+
+                // Left eye of 3D head
+                const leftAngleY = Math.atan2(leftEyeLookX - (-2.5 * params.modelScale), eyeZ) * params.eyeTrackStrength;
+                const leftAngleX = Math.atan2(-leftEyeLookY, eyeZ) * params.eyeTrackStrength;
+
+                // Right eye of 3D head
+                const rightAngleY = Math.atan2(rightEyeLookX - (2.5 * params.modelScale), eyeZ) * params.eyeTrackStrength;
+                const rightAngleX = Math.atan2(-rightEyeLookY, eyeZ) * params.eyeTrackStrength;
 
                 const maxEyeRot = Math.PI / 4;
-                const eyeTargetY = THREE.MathUtils.clamp(eyeAngleY, -maxEyeRot, maxEyeRot);
-                const eyeTargetX = THREE.MathUtils.clamp(eyeAngleX, -maxEyeRot, maxEyeRot);
 
-                eyeLeftGroup.rotation.y = THREE.MathUtils.lerp(eyeLeftGroup.rotation.y, eyeTargetY, params.smoothing * 2.5);
-                eyeLeftGroup.rotation.x = THREE.MathUtils.lerp(eyeLeftGroup.rotation.x, eyeTargetX, params.smoothing * 2.5);
-                eyeRightGroup.rotation.y = THREE.MathUtils.lerp(eyeRightGroup.rotation.y, eyeTargetY, params.smoothing * 2.5);
-                eyeRightGroup.rotation.x = THREE.MathUtils.lerp(eyeRightGroup.rotation.x, eyeTargetX, params.smoothing * 2.5);
+                // Apply to left eye
+                const leftTargetY = THREE.MathUtils.clamp(leftAngleY, -maxEyeRot, maxEyeRot);
+                const leftTargetX = THREE.MathUtils.clamp(leftAngleX, -maxEyeRot, maxEyeRot);
+
+                // Apply to right eye
+                const rightTargetY = THREE.MathUtils.clamp(rightAngleY, -maxEyeRot, maxEyeRot);
+                const rightTargetX = THREE.MathUtils.clamp(rightAngleX, -maxEyeRot, maxEyeRot);
+
+                // Faster, more responsive eye movement
+                eyeLeftGroup.rotation.y = THREE.MathUtils.lerp(eyeLeftGroup.rotation.y, leftTargetY, params.smoothing * 3);
+                eyeLeftGroup.rotation.x = THREE.MathUtils.lerp(eyeLeftGroup.rotation.x, leftTargetX, params.smoothing * 3);
+                eyeRightGroup.rotation.y = THREE.MathUtils.lerp(eyeRightGroup.rotation.y, rightTargetY, params.smoothing * 3);
+                eyeRightGroup.rotation.x = THREE.MathUtils.lerp(eyeRightGroup.rotation.x, rightTargetX, params.smoothing * 3);
             }
         }
 
@@ -709,8 +873,14 @@
                         const lIris = lm[468], rIris = lm[473];
 
                         if (lIris && rIris) {
-                            const cx = (lIris.x + rIris.x) / 2;
-                            const cy = (lIris.y + rIris.y) / 2;
+                            // Store individual eye positions for eye-to-eye contact
+                            userEyes.left.set(lIris.x, lIris.y);
+                            userEyes.right.set(rIris.x, rIris.y);
+                            userEyes.centerX = (lIris.x + rIris.x) / 2;
+                            userEyes.centerY = (lIris.y + rIris.y) / 2;
+
+                            const cx = userEyes.centerX;
+                            const cy = userEyes.centerY;
 
                             const dx = lIris.x - rIris.x;
                             const dy = lIris.y - rIris.y;
@@ -729,17 +899,39 @@
                                 z
                             );
 
-                            // Debug viz
+                            // Debug viz - show both eyes being tracked
                             ctx.fillStyle = '#00ffff';
                             ctx.shadowColor = '#00ffff';
                             ctx.shadowBlur = 10;
+
+                            // Left eye (user's)
                             ctx.beginPath();
-                            ctx.arc(cx * canvas.width, cy * canvas.height, 4, 0, Math.PI * 2);
+                            ctx.arc(lIris.x * canvas.width, lIris.y * canvas.height, 3, 0, Math.PI * 2);
                             ctx.fill();
 
+                            // Right eye (user's)
+                            ctx.beginPath();
+                            ctx.arc(rIris.x * canvas.width, rIris.y * canvas.height, 3, 0, Math.PI * 2);
+                            ctx.fill();
+
+                            // Center point
+                            ctx.fillStyle = '#ff0080';
+                            ctx.beginPath();
+                            ctx.arc(cx * canvas.width, cy * canvas.height, 2, 0, Math.PI * 2);
+                            ctx.fill();
+
+                            // Draw connecting line between eyes
+                            ctx.strokeStyle = '#00ffff';
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            ctx.moveTo(lIris.x * canvas.width, lIris.y * canvas.height);
+                            ctx.lineTo(rIris.x * canvas.width, rIris.y * canvas.height);
+                            ctx.stroke();
+
+                            ctx.fillStyle = '#00ffff';
                             ctx.font = '10px Courier New';
                             ctx.fillText(`DIST: ${z.toFixed(0)}cm`, 5, 15);
-                            ctx.fillText(`X: ${wx.toFixed(1)}`, 5, 27);
+                            ctx.fillText(`EYES LOCKED`, 5, 27);
                         }
                     }
                 });
@@ -785,17 +977,20 @@
             }
 
             // Update eye materials
-            if (eyeLeftGroup) {
+            if (eyeLeftGroup && eyeLeftGroup.children[0]) {
                 eyeLeftGroup.children[0].material.uniforms.time.value = time;
                 eyeRightGroup.children[0].material.uniforms.time.value = time;
             }
+
+            // Update blinking
+            updateBlink(time, delta);
 
             // Smooth tracking
             state.head.lerp(state.targetHead, params.smoothing);
             state.viewerPosition.copy(state.head);
 
             updateCamera(state.head);
-            updateHeadLookAt();
+            updateHeadLookAt(time);
 
             renderer.render(scene, camera);
         }
